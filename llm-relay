@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Dev launcher — run from the project root or add this directory to PATH.
+# Usage: ./llm-relay [command] [args]
+exec python3 -m llm_relay "$@"

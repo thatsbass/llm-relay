@@ -322,6 +322,11 @@ llm-relay/
 
 ---
 
+## Stargazers over time
+[![Stargazers over time](https://starchart.cc/thatsbass/llm-relay.svg?background=%23070707&axis=%23333333&line=%23ffffff)](https://starchart.cc/thatsbass/llm-relay)
+
+---
+
 ## Contributing
 
 Contributions are welcome — especially new backend translators!

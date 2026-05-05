@@ -11,6 +11,20 @@
                          └──────────────────────────┘          └──────────────┘
 ```
 
+```mermaid
+sequenceDiagram
+    actor Developer
+    participant Codex_CLI as Codex CLI
+    participant LLM_Relay as llm-relay :8080
+    participant DeepSeek_API as DeepSeek API
+
+    Developer->>Codex_CLI: codex "..."
+    Codex_CLI->>LLM_Relay: OpenAI Responses API — POST /responses
+    LLM_Relay->>DeepSeek_API: Chat Completions — POST /v1/chat/completions
+    DeepSeek_API-->>LLM_Relay: Chat response
+    LLM_Relay-->>Codex_CLI: Translated Responses API response
+    Codex_CLI-->>Developer: Display result
+```
 ---
 
 ## Why llm-relay?
@@ -26,6 +40,13 @@ Codex CLI speaks the **OpenAI Responses API** — a format that most alternative
 
 ## Requirements
 
+> **Don't have Codex CLI yet?**
+> llm-relay is a companion to Codex CLI — install it first:
+> - **App (macOS / Windows):** [claude.ai/download](https://claude.ai/download)
+> - **CLI (macOS / Linux):** `npm install -g @openai/codex`
+> - **Docs:** [github.com/openai/codex](https://github.com/openai/codex)
+
+- **Codex CLI** — installed and working on your machine (see above)
 - **Python 3.9 or higher** — check with `python3 --version`
 - **A DeepSeek API key** — get one at [platform.deepseek.com](https://platform.deepseek.com/api_keys)
 

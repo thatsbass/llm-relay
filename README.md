@@ -5,8 +5,10 @@
 **llm-relay** is a local proxy that translates the [OpenAI Responses API](https://platform.openai.com/docs/api-reference/responses) into requests any OpenAI-compatible backend can understand. It runs silently in the background so tools like [Codex CLI](https://github.com/openai/codex) can use DeepSeek (or other providers) without any code changes.
 
 ```
-Codex CLI  →  llm-relay (local proxy)  →  DeepSeek API
-              http://127.0.0.1:8080         api.deepseek.com
+┌─────────────┐          ┌──────────────────────────┐          ┌──────────────┐
+│  Codex CLI  │  ──────▶ │  llm-relay (local proxy) │  ──────▶ │ DeepSeek API │
+└─────────────┘          │  http://127.0.0.1:8080   │          │ deepseek.com │
+                         └──────────────────────────┘          └──────────────┘
 ```
 
 ---
@@ -179,7 +181,7 @@ source ~/.llm-relay/.env
 ┌─────────────┐     OpenAI         ┌─────────────┐     DeepSeek       ┌──────────────┐
 │  Codex CLI  │  Responses API  →  │  llm-relay  │  Chat Completions  │  DeepSeek    │
 │             │  POST /responses   │  :8080      │  POST /v1/chat/... │  API         │
-└─────────────┘                    └─────────────┘                     └──────────────┘
+└─────────────┘                    └─────────────┘                    └──────────────┘
                                          │
                                    ┌─────┴──────┐
                                    │ Translates │

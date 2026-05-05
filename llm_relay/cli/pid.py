@@ -1,19 +1,4 @@
-"""
-PID file management.
-
-Enables ``llm-relay stop`` (launched in a second terminal) to send SIGTERM
-to a proxy that is already running in the foreground.
-
-Protocol
---------
-1. On proxy start  → ``write()`` saves ``os.getpid()`` to the PID file.
-2. On clean stop   → ``clear()`` deletes the PID file (Ctrl+C handler).
-3. On crash/kill   → PID file stays on disk (stale); ``read()`` detects
-                     the stale file via ``os.kill(pid, 0)`` and cleans it up.
-
-The PID file lives at ``~/.llm-relay/proxy.pid`` alongside the user config,
-so it is naturally scoped to the local user and easy to inspect manually.
-"""
+"""PID file helpers for cross-terminal proxy start/stop via ~/.llm-relay/proxy.pid."""
 
 from __future__ import annotations
 
@@ -30,37 +15,18 @@ _PID_FILE = RELAY_DIR / "proxy.pid"
 
 
 def write() -> None:
-    """
-    Write the current process PID to the PID file.
-
-    Called once, immediately after the ``HTTPServer`` is created and before
-    ``serve_forever()`` blocks, so that ``stop()`` can target the right PID
-    even if the server hasn't started accepting connections yet.
-    """
+    """Write the current process PID to the PID file."""
     RELAY_DIR.mkdir(parents=True, exist_ok=True)
     _PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
 
 
 def clear() -> None:
-    """
-    Remove the PID file.
-
-    Called on clean shutdown (``KeyboardInterrupt`` or ``SIGTERM`` handler).
-    A missing PID file is not an error — ``missing_ok=True`` silences it.
-    """
+    """Remove the PID file on clean shutdown."""
     _PID_FILE.unlink(missing_ok=True)
 
 
 def read() -> Optional[int]:
-    """
-    Read the PID from the file and verify the process is still alive.
-
-    If the PID file exists but the process is gone (crash / ``kill -9``),
-    the stale file is silently removed and ``None`` is returned.
-
-    Returns:
-        The live PID integer, or ``None`` if no proxy is running.
-    """
+    """Return the live proxy PID, or None if the process is gone (cleans up stale files)."""
     if not _PID_FILE.exists():
         return None
 
@@ -69,8 +35,7 @@ def read() -> Optional[int]:
     except (ValueError, OSError):
         return None
 
-    # ``os.kill(pid, 0)`` sends no actual signal — it is purely an existence
-    # check.  It raises ``ProcessLookupError`` when the process is gone.
+    # os.kill(pid, 0) is a no-op signal used purely as a process existence check.
     try:
         os.kill(pid, 0)
         return pid
@@ -80,13 +45,7 @@ def read() -> Optional[int]:
 
 
 def stop() -> bool:
-    """
-    Send ``SIGTERM`` to the running proxy and remove the PID file.
-
-    Returns:
-        ``True``  — proxy was running; SIGTERM was delivered.
-        ``False`` — proxy is not running (or PID file is stale).
-    """
+    """Send SIGTERM to the proxy; returns True if it was running, False otherwise."""
     pid = read()
     if pid is None:
         return False

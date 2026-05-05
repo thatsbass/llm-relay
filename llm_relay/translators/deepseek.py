@@ -1,33 +1,4 @@
-"""
-DeepSeek translator.
-
-Concrete implementation of ``AbstractTranslator`` for the DeepSeek
-Chat Completions API (https://api.deepseek.com/v1/chat/completions).
-
-Responsibilities
-----------------
-1. ``build_request``  — Assembles the DeepSeek-specific JSON payload from the
-                        normalised messages, tools, and config.
-2. ``parse_response`` — Converts the DeepSeek JSON response into the OpenAI
-                        Responses API format expected by Codex CLI, including:
-                          • Extracting native JSON tool calls.
-                          • Detecting and parsing inline XML / DSML tool calls.
-                          • Building the ``output[]`` array.
-                          • Normalising the ``usage`` field.
-3. ``forward``        — Inherited from ``AbstractTranslator`` (Bearer auth,
-                        TLS validation, 120-second timeout).
-
-DeepSeek-specific notes
------------------------
-- Model: ``deepseek-chat`` (instruction-tuned, supports function calling).
-- The API is largely OpenAI-compatible but not identical.
-- DeepSeek sometimes returns tool calls as inline XML in ``message.content``
-  rather than (or in addition to) the standard ``tool_calls`` JSON field.
-  The XML parser in ``llm_relay.parsers.xml_tools`` handles this.
-- ``stream`` is always set to ``False``: the proxy receives the full response,
-  then *simulates* streaming to the client via SSE (handled in the server layer).
-  This avoids partial-JSON parsing complexity in the translator.
-"""
+"""DeepSeek Chat Completions translator."""
 
 from __future__ import annotations
 
@@ -46,13 +17,7 @@ _DEFAULT_MODEL: str = "deepseek-chat"
 
 
 class DeepSeekTranslator(AbstractTranslator):
-    """
-    Translator for the DeepSeek Chat Completions API.
-
-    Registered in ``TranslatorFactory`` under the key ``"deepseek"``.
-    Instantiated by the factory with the runtime ``Config``; do not
-    construct directly in production code.
-    """
+    """Translator for the DeepSeek Chat Completions API."""
 
     # ── AbstractTranslator properties ─────────────────────────────────────────
 
@@ -75,24 +40,7 @@ class DeepSeekTranslator(AbstractTranslator):
         temperature: float | None = None,
         top_p: float | None = None,
     ) -> dict:
-        """
-        Assemble the DeepSeek Chat Completions request payload.
-
-        Args:
-            messages:          Full conversation history (Chat Completions format).
-            tools:             Translated tools list, or ``None``.
-            max_output_tokens: Maximum tokens for the completion.
-            tc_count:          Number of tool-call turns already in *messages*.
-                               When this exceeds ``config.max_tool_call_turns``,
-                               ``tool_choice`` is forced to ``"none"`` so the
-                               model is required to produce a text answer and
-                               cannot keep looping on tool calls indefinitely.
-            temperature:       Forwarded as-is when provided by the client.
-            top_p:             Forwarded as-is when provided by the client.
-
-        Returns:
-            A dict ready for ``json.dumps()`` and forwarding to DeepSeek.
-        """
+        """Assemble the DeepSeek Chat Completions request payload."""
         payload: dict = {
             "model":      _DEFAULT_MODEL,
             "messages":   messages,
@@ -124,26 +72,7 @@ class DeepSeekTranslator(AbstractTranslator):
     # ── Response parser ───────────────────────────────────────────────────────
 
     def parse_response(self, raw_body: bytes, req_id: str) -> ParsedResponse:
-        """
-        Convert a raw DeepSeek response into a ``ParsedResponse``.
-
-        Steps
-        -----
-        1. JSON-decode the raw bytes.
-        2. Extract ``choices[0].message`` (content + native tool_calls).
-        3. Run the XML/DSML parser on ``message.content`` to catch any
-           tool calls emitted as markup rather than JSON.
-        4. Merge native and XML tool calls into a single list.
-        5. Build the Responses API ``output[]`` array.
-        6. Construct the assistant message for session persistence.
-
-        Args:
-            raw_body: Raw bytes from ``forward()``.
-            req_id:   Proxy-generated request ID (e.g. ``"resp_abc123"``).
-
-        Returns:
-            ``ParsedResponse(response=..., assistant_message=...)``.
-        """
+        """Convert a raw DeepSeek response into a ParsedResponse."""
         chat_resp = self._safe_load(raw_body)
 
         # ── 1. Extract the first choice ───────────────────────────────────────
@@ -191,13 +120,7 @@ class DeepSeekTranslator(AbstractTranslator):
 
     @staticmethod
     def _xml_tc_to_chat_tc(xtc: XmlToolCall) -> dict:
-        """
-        Convert an ``XmlToolCall`` (from the XML parser) into the standard
-        Chat Completions ``tool_calls`` dict shape.
-
-        We generate a fresh UUID-based call ID because XML tool calls do not
-        carry one — DeepSeek only includes IDs in the native JSON format.
-        """
+        """Convert an XmlToolCall into the Chat Completions tool_calls dict shape."""
         return {
             "id":   f"call_{uuid.uuid4().hex[:12]}",
             "type": "function",
@@ -211,18 +134,7 @@ class DeepSeekTranslator(AbstractTranslator):
 
     @staticmethod
     def _build_output(clean_text: str, all_tool_calls: list) -> list:
-        """
-        Build the ``output[]`` array for the Responses API response.
-
-        Rules:
-        - If there are NO tool calls → emit a single ``type=message`` item
-          containing the assistant's text.
-        - For EACH tool call → emit a ``type=function_call`` item.
-        - If there are tool calls, the text item is omitted (the model is in
-          "acting" mode, not "answering" mode).
-
-        This mirrors the behaviour of the real OpenAI Responses API.
-        """
+        """Build the output[] array for the Responses API response."""
         output: list = []
 
         # Text message (only when there are no tool calls).
@@ -255,12 +167,7 @@ class DeepSeekTranslator(AbstractTranslator):
 
     @staticmethod
     def _build_usage(usage: dict) -> dict:
-        """
-        Normalise DeepSeek's usage dict to the Responses API ``usage`` schema.
-
-        DeepSeek uses ``prompt_tokens`` / ``completion_tokens``; the Responses
-        API uses ``input_tokens`` / ``output_tokens``.
-        """
+        """Normalise DeepSeek's prompt/completion_tokens to Responses API input/output_tokens."""
         cached = (
             usage.get("prompt_tokens_details", {}).get("cached_tokens", 0)
         )
@@ -274,13 +181,7 @@ class DeepSeekTranslator(AbstractTranslator):
 
     @staticmethod
     def _build_assistant_message(msg: dict, all_tool_calls: list) -> dict:
-        """
-        Build the assistant message dict that will be appended to session history.
-
-        When tool calls are present, ``content`` must be ``None`` per the
-        Chat Completions spec (some backends reject non-null content alongside
-        tool_calls).
-        """
+        """Build the assistant message for session history."""
         if all_tool_calls:
             return {
                 "role":       "assistant",

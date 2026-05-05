@@ -1,15 +1,111 @@
 # llm-relay
 
-> Use Codex CLI with any LLM backend — DeepSeek, Mistral, and more.
+![Python](https://img.shields.io/badge/Python-3.9%2B-blue?logo=python&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-green)
+![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-lightgrey)
+![Zero dependencies](https://img.shields.io/badge/Dependencies-zero-brightgreen)
 
-**llm-relay** is a local proxy that translates the [OpenAI Responses API](https://platform.openai.com/docs/api-reference/responses) into requests any OpenAI-compatible backend can understand. It runs silently in the background so tools like [Codex CLI](https://github.com/openai/codex) can use DeepSeek (or other providers) without any code changes.
+**Use Codex CLI with DeepSeek — up to 70× cheaper than OpenAI, zero workflow changes.**
+
+---
+
+### Why I built this
+
+I use Codex CLI every day to code. It's one of the best AI coding agents out there.
+
+But the OpenAI API bill kept growing — and when I looked at alternatives like DeepSeek, the quality for coding tasks was just as good, at a **fraction of the cost**.
+
+The problem? **Codex CLI only speaks OpenAI's Responses API.** You can't just point it at DeepSeek and expect it to work. There was no bridge.
+
+So I built one.
+
+llm-relay runs locally, translates silently, and Codex never knows the difference. Same workflow. Same results. Dramatically lower cost.
+
+---
+
+## Why pay more?
+
+| Category | OpenAI | DeepSeek | Savings |
+|---|---|---|---|
+| Top-tier | GPT-5.5 Pro · $5.00 / $30.00 | DeepSeek-V4 Pro · $0.14 / $0.42 | **~70× cheaper** |
+| Standard | GPT-4o · $2.50 / $10.00 | DeepSeek-V3.2 · $0.28 / $1.10 | **~9× cheaper** |
+| Reasoning | OpenAI o3 · $1.10 / $4.40 | DeepSeek-R1 · $0.55 / $2.19 | **~2× cheaper** |
+| Lightweight | GPT-4o mini · $0.15 / $0.60 | DeepSeek-Lite · $0.07 / $0.20 | **~3× cheaper** |
+
+*Per 1M tokens (input / output). Source: official provider pricing pages.*
+
+> Coding with AI every day? This can take you from **$50–100/month → under $5/month**.
+
+---
+
+## Get started in 3 steps
+
+**Prerequisites** — you need these before installing llm-relay:
+- **Codex CLI** → [App (macOS/Windows)](https://claude.ai/download) · [CLI](https://github.com/openai/codex): `npm install -g @openai/codex`
+- **Python 3.9+** → `python3 --version`
+- **DeepSeek API key** → [platform.deepseek.com](https://platform.deepseek.com/api_keys)
+
+---
+
+**Step 1 — Install**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/thatsbass/llm-relay/main/install.sh | bash
+```
+
+> Use `bash`, not `sh`. Do **not** use `sudo`.
+
+---
+
+**Step 2 — Configure** *(the installer runs this automatically)*
 
 ```
-┌─────────────┐          ┌──────────────────────────┐          ┌──────────────┐
-│  Codex CLI  │  ──────▶ │  llm-relay (local proxy) │  ──────▶ │ DeepSeek API │
-└─────────────┘          │  http://127.0.0.1:8080   │          │ deepseek.com │
-                         └──────────────────────────┘          └──────────────┘
+$ llm-relay setup
+
+  ╔══════════════════════════════╗
+  ║      llm-relay  setup        ║
+  ╚══════════════════════════════╝
+
+  Port [8080]:
+  Provider (deepseek) [deepseek]:
+  DEEPSEEK_API_KEY: ****
+
+  ✓ Config saved         → ~/.llm-relay/config.json
+  ✓ Codex config updated → ~/.codex/config.toml
+  ✓ API key auto-export  → ~/.bashrc
 ```
+
+---
+
+**Step 3 — Run**
+
+```bash
+# Terminal 1 — start the proxy
+llm-relay start
+
+# Terminal 2 — use Codex as usual
+codex "Build a REST API in Node.js"
+```
+
+That's it. llm-relay handles everything silently in the background.
+
+---
+
+## What you get
+
+| | |
+|---|---|
+| **No code changes** | Codex never knows it's talking to DeepSeek |
+| **Auto-configured** | `~/.codex/config.toml` is updated automatically |
+| **1M token context** | DeepSeek supports 8× more context than GPT-4o |
+| **Privacy** | Your code goes to DeepSeek, not OpenAI |
+| **No vendor lock-in** | Switch backends without touching your Codex setup |
+| **Extensible** | Add any OpenAI-compatible provider in ~30 lines of Python |
+| **Zero dependencies** | Pure Python stdlib — works on macOS and Linux |
+
+---
+
+## How it works
 
 ```mermaid
 sequenceDiagram
@@ -25,101 +121,13 @@ sequenceDiagram
     LLM_Relay-->>Codex_CLI: Translated Responses API response
     Codex_CLI-->>Developer: Display result
 ```
----
 
-## Why llm-relay?
+Codex CLI speaks the **OpenAI Responses API** — a format DeepSeek doesn't support natively. llm-relay translates in real time:
 
-Codex CLI speaks the **OpenAI Responses API** — a format that most alternative providers do not support. llm-relay bridges the gap:
-
-- **No code changes** in Codex — it never knows it's talking to a different backend.
-- **One command** to install, one command to start.
-- **Auto-configures** `~/.codex/config.toml` — no manual editing required.
-- **Pure Python** — zero external dependencies, works on macOS and Linux.
-
----
-
-## Requirements
-
-> **Don't have Codex CLI yet?**
-> llm-relay is a companion to Codex CLI — install it first:
-> - **App (macOS / Windows):** [claude.ai/download](https://claude.ai/download)
-> - **CLI (macOS / Linux):** `npm install -g @openai/codex`
-> - **Docs:** [github.com/openai/codex](https://github.com/openai/codex)
-
-- **Codex CLI** — installed and working on your machine (see above)
-- **Python 3.9 or higher** — check with `python3 --version`
-- **A DeepSeek API key** — get one at [platform.deepseek.com](https://platform.deepseek.com/api_keys)
-
----
-
-## Installation
-
-### One-line install (recommended)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/thatsbass/llm-relay/main/install.sh | bash
-```
-
-> **Notes:**
-> - Use `bash`, not `sh`. On Ubuntu/Debian, `sh` is `dash` and will fail.
-> - Do **not** use `sudo`. The installer runs as your user and installs into `~/.llm-relay/`. If a step needs elevated privileges (e.g. installing `python3-venv`), the script will call `sudo` itself and ask for your password.
-
-The installer will:
-1. Check that Python 3.9+ is available
-2. Create a virtual environment in `~/.llm-relay/venv/`
-3. Install llm-relay into the venv
-4. Create the `llm-relay` command in `~/.local/bin/`
-5. Add `~/.local/bin` to your PATH (in `.zshrc`, `.zprofile`, `.bashrc`, or `.bash_profile` — whichever your shell uses)
-6. Launch the setup wizard automatically
-
-After the installer finishes, **open a new terminal** (or run `source ~/.zshrc`) for the `llm-relay` command to be available.
-
-### Manual install
-
-```bash
-git clone https://github.com/thatsbass/llm-relay.git
-cd llm-relay
-python3 -m pip install .
-```
-
----
-
-## Quick start
-
-```
-Step 1 — Run the setup wizard (once)
-
-  $ llm-relay setup
-
-  ╔══════════════════════════════╗
-  ║      llm-relay  setup        ║
-  ╚══════════════════════════════╝
-
-  Port [8080]:
-  Provider (deepseek) [deepseek]:
-  DEEPSEEK_API_KEY: ****
-
-  ✓ Config saved       → ~/.llm-relay/config.json
-  ✓ Codex config updated → ~/.codex/config.toml
-  ✓ .env written       → ~/.llm-relay/.env
-
-
-Step 2 — Start the proxy
-
-  $ llm-relay start
-
-  ✓ Proxy running  →  http://127.0.0.1:8080
-  ✓ Backend        →  DeepSeek
-
-  Press Ctrl+C to stop.
-
-
-Step 3 — Use Codex normally (in another terminal)
-
-  $ codex "Write a Python function that reverses a string"
-```
-
-That's it. llm-relay automatically updates `~/.codex/config.toml` during setup so Codex routes all requests through the proxy.
+- **Message format** — Responses API `input[]` → Chat Completions `messages[]`
+- **Tool calls** — function definitions and results in both directions
+- **Streaming** — simulates Server-Sent Events from buffered responses
+- **XML tool calls** — parses tool calls returned as markup instead of JSON
 
 ---
 
@@ -127,41 +135,81 @@ That's it. llm-relay automatically updates `~/.codex/config.toml` during setup s
 
 | Command | Description |
 |---|---|
-| `llm-relay` | Start the proxy (runs setup first if not configured) |
+| `llm-relay` | Start proxy (runs setup first if not configured) |
 | `llm-relay start` | Start the proxy in the foreground |
 | `llm-relay stop` | Stop the proxy from another terminal |
 | `llm-relay status` | Show running state and active configuration |
-| `llm-relay setup` | Re-run the setup wizard (change port, provider, or API key) |
+| `llm-relay setup` | Re-run the setup wizard |
 | `llm-relay update` | Upgrade to the latest version from GitHub |
-| `llm-relay config port 9000` | Change the port without re-running setup |
-| `llm-relay config key sk-xxx` | Update the API key without re-running setup |
-| `llm-relay --version` | Print the version and exit |
-
-### Examples
-
-```bash
-# Check if the proxy is running
-llm-relay status
-
-# Change port and restart
-llm-relay config port 9000
-llm-relay stop && llm-relay start
-
-# Update your API key
-llm-relay config key sk-your-new-key
-
-# Run the setup wizard again (e.g. to switch provider)
-llm-relay setup
-```
+| `llm-relay config port 9000` | Change the port |
+| `llm-relay config key sk-xxx` | Update the API key |
+| `llm-relay --version` | Print version and exit |
 
 ---
 
-## What gets configured automatically
+## Troubleshooting
 
-Running `llm-relay setup` writes or updates the following files:
+<details>
+<summary><b>llm-relay: command not found</b></summary>
 
-### `~/.llm-relay/config.json`
-The proxy's own configuration (source of truth).
+`~/.local/bin` is not in your PATH yet. Run:
+```bash
+source ~/.zshrc    # zsh
+source ~/.bashrc   # bash
+```
+Or open a new terminal.
+</details>
+
+<details>
+<summary><b>Cannot bind to port 8080</b></summary>
+
+Another process is using that port:
+```bash
+llm-relay config port 9000
+llm-relay start
+```
+</details>
+
+<details>
+<summary><b>DEEPSEEK_API_KEY not set</b></summary>
+
+```bash
+llm-relay config key sk-your-key
+```
+</details>
+
+<details>
+<summary><b>502 Upstream error</b></summary>
+
+The proxy cannot reach the DeepSeek API.
+- Check your internet connection
+- Verify your API key at [platform.deepseek.com](https://platform.deepseek.com)
+- Check your quota / billing
+
+```bash
+curl http://127.0.0.1:8080/health
+# Expected: {"status": "ok"}
+```
+</details>
+
+<details>
+<summary><b>Stale PID file after a crash</b></summary>
+
+```bash
+llm-relay stop   # auto-detects and cleans up stale PID files
+llm-relay start
+```
+</details>
+
+---
+
+## Configuration files
+
+`llm-relay setup` writes and maintains three files — you never need to edit them manually.
+
+<details>
+<summary><b>~/.llm-relay/config.json</b> — proxy source of truth</summary>
+
 ```json
 {
   "port": 8080,
@@ -169,9 +217,11 @@ The proxy's own configuration (source of truth).
   "api_key": "sk-your-key"
 }
 ```
+</details>
 
-### `~/.codex/config.toml`
-Codex CLI's configuration — updated automatically. Your existing projects and settings are preserved.
+<details>
+<summary><b>~/.codex/config.toml</b> — updated automatically, existing settings preserved</summary>
+
 ```toml
 model = "gpt-5.5"
 model_provider = "deepseek"
@@ -181,58 +231,26 @@ name = "DeepSeek"
 base_url = "http://127.0.0.1:8080"
 env_key = "DEEPSEEK_API_KEY"
 wire_api = "responses"
-...
 
 # Your existing project trust levels are untouched:
 [projects."/your/project"]
 trust_level = "trusted"
 ```
+</details>
 
-### `~/.llm-relay/.env`
-Optional — source this file if you want the env vars in your shell session:
+<details>
+<summary><b>~/.llm-relay/.env</b> — optional shell export</summary>
+
 ```bash
 source ~/.llm-relay/.env
 ```
-
----
-
-## How it works
-
-```
-┌─────────────┐     OpenAI         ┌─────────────┐     DeepSeek       ┌──────────────┐
-│  Codex CLI  │  Responses API  →  │  llm-relay  │  Chat Completions  │  DeepSeek    │
-│             │  POST /responses   │  :8080      │  POST /v1/chat/... │  API         │
-└─────────────┘                    └─────────────┘                    └──────────────┘
-                                         │
-                                   ┌─────┴──────┐
-                                   │ Translates │
-                                   │ • messages │
-                                   │ • tools    │
-                                   │ • SSE      │
-                                   └────────────┘
-```
-
-llm-relay handles the format differences between the two APIs:
-
-- **Message format** — converts Responses API `input[]` items to Chat Completions `messages[]`
-- **Tool calls** — translates function definitions and results in both directions
-- **Streaming** — simulates Server-Sent Events (the real API streams; the proxy buffers then replays)
-- **XML tool calls** — some backends return tool calls as XML instead of JSON; llm-relay parses both
-
----
-
-## Supported backends
-
-| Backend | Key | Status |
-|---|---|---|
-| [DeepSeek](https://platform.deepseek.com) | `deepseek` | ✅ Supported |
-| More coming | — | 🔜 Planned |
+</details>
 
 ---
 
 ## Adding a new backend
 
-llm-relay uses a **Factory pattern** — adding a backend requires only two files:
+llm-relay uses a **Factory pattern** — adding a backend requires only three files.
 
 **1. Create `llm_relay/translators/my_provider.py`:**
 ```python
@@ -249,7 +267,6 @@ class MyProviderTranslator(AbstractTranslator):
         return {"model": "my-model", "messages": messages, "stream": False}
 
     def parse_response(self, raw_body, req_id):
-        # translate the response to Responses API format
         ...
 ```
 
@@ -259,7 +276,7 @@ from llm_relay.translators.my_provider import MyProviderTranslator
 TranslatorFactory.register("myprovider", MyProviderTranslator)
 ```
 
-**3. Add it to the provider list in `llm_relay/cli/config_manager.py`:**
+**3. Add it to `llm_relay/cli/config_manager.py`:**
 ```python
 PROVIDERS = {
     "deepseek":   {"display": "DeepSeek",    "env_key": "DEEPSEEK_API_KEY"},
@@ -267,52 +284,16 @@ PROVIDERS = {
 }
 ```
 
-No other file needs to change. The wizard and factory pick it up automatically.
+Nothing else needs to change. The wizard and factory pick it up automatically.
 
 ---
 
-## Troubleshooting
+## Supported backends
 
-### `llm-relay: command not found`
-The `~/.local/bin` directory is not in your PATH yet.
-```bash
-# For zsh
-source ~/.zprofile   # or ~/.zshrc
-
-# For bash
-source ~/.bashrc     # or ~/.bash_profile
-```
-Or open a new terminal window.
-
-### `Cannot bind to port 8080`
-Another process is using that port.
-```bash
-llm-relay config port 9000
-llm-relay start
-```
-
-### `DEEPSEEK_API_KEY not set`
-```bash
-llm-relay config key sk-your-key
-```
-
-### `502 Upstream error`
-The proxy cannot reach the DeepSeek API.
-- Check your internet connection.
-- Verify your API key is valid at [platform.deepseek.com](https://platform.deepseek.com).
-- Check your API quota / billing.
-
-### Proxy crashes and leaves a stale PID file
-```bash
-llm-relay stop    # detects and cleans up the stale PID file automatically
-llm-relay start
-```
-
-### Health check
-```bash
-curl http://127.0.0.1:8080/health
-# Expected: {"status": "ok"}
-```
+| Backend | Key | Status |
+|---|---|---|
+| [DeepSeek](https://platform.deepseek.com) | `deepseek` | ✅ Supported |
+| More coming | — | 🔜 Planned |
 
 ---
 
@@ -327,7 +308,7 @@ llm-relay/
 │   │   ├── codex_writer.py        # Smart merge of ~/.codex/config.toml
 │   │   ├── pid.py                 # PID file (start/stop between terminals)
 │   │   ├── wizard.py              # Interactive setup wizard
-│   │   └── commands.py            # start / stop / status / config
+│   │   └── commands.py            # start / stop / status / config / update
 │   ├── parsers/
 │   │   ├── messages.py            # Responses API → Chat Completions format
 │   │   └── xml_tools.py           # XML/DSML tool-call parser
@@ -345,13 +326,9 @@ llm-relay/
 
 ---
 
-## Stargazers over time
-[![Stargazers over time](https://starchart.cc/thatsbass/llm-relay.svg?background=%23070707&axis=%23ffffff&line=%23ffffff)](https://starchart.cc/thatsbass/llm-relay)
-
-
 ## Contributing
 
-Contributions are welcome — especially new backend translators!
+Contributions welcome — especially new backend translators!
 
 ```bash
 git clone https://github.com/thatsbass/llm-relay.git
@@ -359,14 +336,16 @@ cd llm-relay
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-# Run tests
 python3 -m pytest tests/ -v
-
-# Or without pytest
-python3 -m unittest discover -s tests -v
 ```
 
 Please open an issue before starting work on a large change.
+
+---
+
+## Stargazers
+
+[![Stargazers over time](https://starchart.cc/thatsbass/llm-relay.svg?background=%23070707&axis=%23ffffff&line=%23ffffff)](https://starchart.cc/thatsbass/llm-relay)
 
 ---
 

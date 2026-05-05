@@ -1,16 +1,4 @@
-"""
-Local configuration manager.
-
-Source of truth: ~/.llm-relay/config.json
-Also generates ~/.llm-relay/.env for manual shell sourcing.
-
-Design notes
-------------
-- Zero external dependencies — pure stdlib only.
-- ``RelayConfig`` is a plain (mutable) dataclass so ``cmd_config`` can update
-  a single field without rebuilding the whole object.
-- All file I/O is isolated here; no other module touches the JSON file directly.
-"""
+"""Reads and writes ~/.llm-relay/config.json and ~/.llm-relay/.env."""
 
 from __future__ import annotations
 
@@ -48,17 +36,7 @@ PROVIDERS: dict[str, dict] = {
 
 @dataclass
 class RelayConfig:
-    """
-    Runtime configuration for the llm-relay proxy.
-
-    Stored as JSON at ``~/.llm-relay/config.json``.  Fields are mutable so
-    ``cmd_config`` can update individual values in place before re-saving.
-
-    Attributes:
-        port:     Local port the proxy listens on.
-        provider: Backend provider key (must be in ``PROVIDERS``).
-        api_key:  Secret API key for the upstream backend.
-    """
+    """Mutable proxy config stored at ~/.llm-relay/config.json."""
 
     port:     int
     provider: str
@@ -76,11 +54,7 @@ class RelayConfig:
         return f"http://127.0.0.1:{self.port}"
 
     def env_key_name(self) -> str:
-        """
-        Environment variable name for the API key.
-
-        Example: ``"DEEPSEEK_API_KEY"`` for the ``deepseek`` provider.
-        """
+        """Environment variable name for the API key, e.g. DEEPSEEK_API_KEY."""
         return PROVIDERS.get(self.provider, {}).get("env_key", "API_KEY")
 
     def provider_display(self) -> str:
@@ -94,12 +68,7 @@ class RelayConfig:
 
 
 def load() -> Optional[RelayConfig]:
-    """
-    Load the config from ``~/.llm-relay/config.json``.
-
-    Returns ``None`` if the file is absent or malformed — callers should
-    treat ``None`` as "not yet configured" and run the setup wizard.
-    """
+    """Load config from ~/.llm-relay/config.json, or None if absent or malformed."""
     if not CONFIG_FILE.exists():
         return None
     try:
@@ -137,13 +106,7 @@ def is_configured() -> bool:
 
 
 def _write_env(config: RelayConfig) -> None:
-    """
-    Write ``~/.llm-relay/.env`` for users who prefer to source env vars
-    manually in their shell (``source ~/.llm-relay/.env``).
-
-    This file is NOT auto-sourced — the proxy sets env vars in its own
-    process space at startup via ``os.environ``.
-    """
+    """Write ~/.llm-relay/.env with export statements for the API key and base URL."""
     env_key = config.env_key_name()
     lines = [
         "# llm-relay — source this file to export env vars in your shell:",

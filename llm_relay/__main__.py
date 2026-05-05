@@ -1,21 +1,4 @@
-"""
-Entry point for ``python -m llm_relay`` and the ``llm-relay`` CLI command.
-
-Subcommand routing
-------------------
-    llm-relay               → start (wizard first if not configured)
-    llm-relay start         → start proxy in foreground
-    llm-relay stop          → stop running proxy via PID file
-    llm-relay status        → show running state + active config
-    llm-relay setup         → re-run setup wizard
-    llm-relay update        → upgrade to the latest version from GitHub
-    llm-relay config port N → change port
-    llm-relay config key K  → update API key
-    llm-relay --version     → print version and exit
-
-Design: commands are imported lazily inside ``main()`` so that fast commands
-(``stop``, ``status``) never load the full HTTP server stack.
-"""
+"""Entry point for ``python -m llm_relay`` and the ``llm-relay`` CLI command."""
 
 from __future__ import annotations
 
@@ -101,12 +84,7 @@ examples:
 
 
 def main() -> None:
-    """
-    Parse CLI arguments and dispatch to the appropriate command handler.
-
-    Importing ``commands`` is deferred until after argument parsing so that
-    ``llm-relay --version`` and ``llm-relay --help`` never load heavy modules.
-    """
+    """Parse CLI arguments and dispatch to the appropriate command handler."""
     parser = _build_parser()
     args   = parser.parse_args()
 

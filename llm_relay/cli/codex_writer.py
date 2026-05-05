@@ -1,27 +1,4 @@
-"""
-Smart TOML merger for ~/.codex/config.toml.
-
-Problem
--------
-Codex CLI stores all its settings in a single TOML file.  We need to inject
-our proxy settings (base_url, model, provider…) without destroying the user's
-existing content (project trust levels, TUI preferences, other providers, etc.)
-
-Approach: segment-based merge
-------------------------------
-We split the file into "segments" — one for the top-level block (before any
-section header) and one per ``[section]``.  We update only the segments we
-own, leave everything else byte-for-byte identical, then reassemble.
-
-This avoids a general-purpose TOML parser (which would require a dependency
-or Python 3.11+).  The tradeoff is that we can only update simple
-``key = value`` lines, not inline tables or arrays — which is all we need.
-
-Filesystem
-----------
-Target file: ``~/.codex/config.toml``
-Created (with a minimal skeleton) if absent.
-"""
+"""Segment-based TOML merger for ~/.codex/config.toml — preserves user content."""
 
 from __future__ import annotations
 
@@ -45,17 +22,7 @@ _CODEX_MODEL = "gpt-5.5"
 
 
 def update(config: RelayConfig) -> None:
-    """
-    Merge llm-relay settings into ``~/.codex/config.toml``.
-
-    - Creates the file (and ``~/.codex/``) if absent.
-    - Preserves ALL existing content that llm-relay did not write.
-    - Updates ``model``, ``model_provider``, ``[model_providers.<provider>]``,
-      and ``[tui.model_availability_nux]`` only.
-
-    Args:
-        config: Current relay configuration to write.
-    """
+    """Merge llm-relay settings into ~/.codex/config.toml, preserving all other content."""
     existing = (
         CODEX_CONFIG.read_text(encoding="utf-8")
         if CODEX_CONFIG.exists()
@@ -70,11 +37,7 @@ def update(config: RelayConfig) -> None:
 
 
 def _merge(content: str, config: RelayConfig) -> str:
-    """
-    Merge relay config into a TOML content string and return the result.
-
-    This is a pure function (no I/O) — easy to test in isolation.
-    """
+    """Pure function: merge relay config into a TOML string and return the result."""
     segs = _split(content)
 
     # ── Top-level keys ────────────────────────────────────────────────────────
@@ -112,16 +75,7 @@ _SECTION_RE = re.compile(r"^\[([^\[\]]+)\]$")
 
 
 def _split(content: str) -> dict:
-    """
-    Split a TOML string into an ordered dict of segments.
-
-    Keys:
-        ``None`` → the top-level block (lines before the first section header)
-        ``str``  → section name, e.g. ``"model_providers.deepseek"``
-
-    Preserves insertion order (Python 3.7+) so ``_reassemble`` can emit
-    sections in their original order.
-    """
+    """Split TOML into an ordered dict: None → top-level block, str → section name."""
     segments: dict       = {}
     current_key: Optional[str] = None
     current_lines: list[str]   = []
@@ -142,13 +96,7 @@ def _split(content: str) -> dict:
 
 
 def _reassemble(segments: dict) -> str:
-    """
-    Reassemble segments into a valid TOML string.
-
-    The top-level block (key ``None``) is emitted first, then all sections
-    in the order they appear in the dict (which reflects their original order
-    in the file, with any new sections appended at the end).
-    """
+    """Reassemble ordered segments back into a valid TOML string."""
     parts: list[str] = []
 
     # Top-level block.
@@ -177,21 +125,7 @@ _KV_RE = re.compile(r'^(\s*)([\w".]+)(\s*=\s*)(.+?)(\s*(?:#.*)?)$')
 
 
 def _upsert(block: str, key: str, value: str) -> str:
-    """
-    Update *key* to *value* in *block*, or append the line if absent.
-
-    The existing indentation and any inline comment on the matched line are
-    preserved so we don't accidentally reformat the user's file.
-
-    Args:
-        block: A TOML segment string (section header + its key-value lines,
-               or the top-level block).
-        key:   TOML key to set, e.g. ``"base_url"`` or ``'"gpt-5.5"'``.
-        value: TOML value string, e.g. ``'"http://127.0.0.1:8080"'``.
-
-    Returns:
-        Updated block string.
-    """
+    """Update *key* = *value* in *block*, or append it if absent."""
     lines         = block.splitlines(keepends=True)
     key_pattern   = re.compile(rf"^\s*{re.escape(key)}\s*=")
 

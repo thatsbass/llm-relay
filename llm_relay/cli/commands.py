@@ -1,20 +1,4 @@
-"""
-Subcommand implementations.
-
-Each public function (``cmd_*``) maps directly to one CLI subcommand:
-
-    llm-relay              → cmd_start  (wizard first if not configured)
-    llm-relay start        → cmd_start
-    llm-relay stop         → cmd_stop
-    llm-relay status       → cmd_status
-    llm-relay setup        → cmd_setup
-    llm-relay config port  → cmd_config("port", value)
-    llm-relay config key   → cmd_config("key", value)
-
-The functions import lazily where possible (e.g. ``create_server``) to keep
-``llm-relay stop`` and ``llm-relay status`` fast — they should never load the
-full HTTP server stack just to read a PID file.
-"""
+"""CLI subcommand implementations (start, stop, status, setup, update, config)."""
 
 from __future__ import annotations
 
@@ -37,16 +21,7 @@ _REPO = "https://github.com/thatsbass/llm-relay.git"
 
 
 def cmd_start() -> None:
-    """
-    Start the proxy in the foreground.
-
-    Flow:
-    1. Load local config.  If absent or missing API key → run wizard first.
-    2. Inject the API key into the current process environment.
-    3. Build the ``Config`` object (validates key presence).
-    4. Create the ``HTTPServer``.
-    5. Write PID file, install SIGTERM handler, then block on ``serve_forever``.
-    """
+    """Start the proxy, running setup first if not yet configured."""
     relay_cfg = config_manager.load()
     if not relay_cfg or not relay_cfg.api_key.strip():
         print("No configuration found — running setup first.\n")
@@ -116,12 +91,7 @@ def _run(relay_cfg: RelayConfig) -> None:
 
 
 def cmd_stop() -> None:
-    """
-    Send SIGTERM to the running proxy.
-
-    Reads the PID from ``~/.llm-relay/proxy.pid``.  Prints a clear message
-    whether the proxy was running or not.
-    """
+    """Send SIGTERM to the running proxy via the PID file."""
     if _pid.stop():
         _ok("Proxy stopped.")
     else:
@@ -132,11 +102,7 @@ def cmd_stop() -> None:
 
 
 def cmd_status() -> None:
-    """
-    Print the running state and active configuration.
-
-    Never exits with a non-zero code — status is informational only.
-    """
+    """Print the running state and active configuration."""
     running = _pid.is_running()
     pid_val = _pid.read()
     cfg     = config_manager.load()
@@ -164,12 +130,7 @@ def cmd_status() -> None:
 
 
 def cmd_setup() -> None:
-    """
-    Re-run the interactive setup wizard.
-
-    Can be called even when a proxy is already running — the new config
-    takes effect on the next ``llm-relay start``.
-    """
+    """Re-run the interactive setup wizard."""
     _run_wizard()
     print("Setup complete.")
     if _pid.is_running():
@@ -183,14 +144,7 @@ def cmd_setup() -> None:
 
 
 def cmd_update() -> None:
-    """
-    Upgrade llm-relay to the latest version from GitHub.
-
-    Uses the pip from the same venv as the running Python so the update
-    always targets the correct installation (never a system-wide pip).
-    If the proxy is running it is stopped first and the user is reminded
-    to restart it after the update.
-    """
+    """Upgrade llm-relay to the latest version from GitHub using venv pip."""
     pip = Path(sys.executable).parent / "pip"
     if not pip.exists():
         _die(
@@ -238,21 +192,7 @@ def cmd_update() -> None:
 
 
 def cmd_config(subkey: str, value: str) -> None:
-    """
-    Update a single configuration value without re-running the full wizard.
-
-    Supported subkeys
-    -----------------
-    port  — change the listening port (integer 1-65535)
-    key   — update the API key
-
-    Both operations save the updated config and patch ``~/.codex/config.toml``.
-    If the proxy is currently running, a reminder to restart is printed.
-
-    Args:
-        subkey: ``"port"`` or ``"key"``.
-        value:  New value as a string.
-    """
+    """Update a single config value (port or key) without re-running setup."""
     cfg = config_manager.load()
     if cfg is None:
         _die("Not configured yet. Run:  llm-relay setup")

@@ -1,16 +1,4 @@
-"""
-First-time setup wizard.
-
-Prompts the user interactively for: port, provider, and API key.
-On completion, saves the config and patches ~/.codex/config.toml.
-
-Design notes
-------------
-- No external dependencies — uses only ``input()`` and ``getpass``.
-- ``getpass.getpass()`` hides the API key while typing (no terminal echo).
-- Pressing Enter on any field accepts the displayed default.
-- Ctrl+C at any point exits cleanly with code 1.
-"""
+"""Interactive setup wizard — prompts for port, provider, and API key."""
 
 from __future__ import annotations
 
@@ -28,15 +16,7 @@ from llm_relay.cli.config_manager import PROVIDERS, RelayConfig
 
 
 def run() -> RelayConfig:
-    """
-    Run the interactive setup wizard and return the saved ``RelayConfig``.
-
-    Loads any existing config as defaults so re-running the wizard never
-    forces the user to retype everything from scratch.
-
-    Raises:
-        SystemExit(1): If the user aborts with Ctrl+C.
-    """
+    """Run the interactive setup wizard and return the saved RelayConfig."""
     _header()
 
     existing = config_manager.load() or RelayConfig.default()
@@ -82,12 +62,7 @@ def _ask_provider(default: str) -> str:
 
 
 def _ask_api_key(current: str, provider: str) -> str:
-    """
-    Ask for the API key using hidden input (no terminal echo).
-
-    If the user presses Enter without typing, the existing key is kept.
-    This way re-running the wizard never accidentally clears a valid key.
-    """
+    """Ask for the API key with hidden input; keeps the existing key on empty Enter."""
     env_key = PROVIDERS[provider]["env_key"]
     hint    = f" [current ends in …{current[-4:]}]" if current else ""
 
@@ -161,10 +136,7 @@ def _detect_profile() -> str:
 
 
 def _patch_shell_profile() -> str:
-    """
-    Append ``source ~/.llm-relay/.env`` to the user's shell profile if it isn't
-    already there.  Returns the profile path on success, empty string otherwise.
-    """
+    """Append the .env source line to the shell profile if not already present."""
     profile = _detect_profile()
     if not profile:
         return ""

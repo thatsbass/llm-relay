@@ -1,39 +1,10 @@
 """
-HTTP request handler.
+HTTP request handler for the llm-relay proxy.
 
-Receives OpenAI Responses API calls from the client (e.g. Codex CLI),
-orchestrates the translation pipeline, and returns either a JSON response
-or a Server-Sent Events (SSE) stream.
-
-Design: dependency injection via class factory
-----------------------------------------------
-``BaseHTTPRequestHandler`` is instantiated by ``HTTPServer`` on every request —
-we cannot override its ``__init__`` signature to inject dependencies.  The
-standard Python solution is a *class factory*: ``make_handler()`` creates a
-new class that closes over the shared dependencies as class-level attributes.
-This gives us:
-
-  - Full dependency injection (no globals, no singletons).
-  - Easy unit testing: construct the class directly with mock dependencies.
-  - A clean separation between HTTP plumbing and business logic.
-
-SSE simulation
---------------
-The backend (DeepSeek) is called in non-streaming mode: we receive the full
-response as a single JSON payload.  When the client requests streaming, we
-*simulate* SSE by replaying the completed response as a sequence of events
-that matches the real OpenAI Responses API streaming protocol.
-
-This avoids partial-JSON parsing complexity and keeps the translator layer
-stateless, while still letting streaming-aware clients (like Codex CLI) work
-exactly as they expect.
-
-Supported endpoints
--------------------
-  GET  /health              — Liveness probe (returns ``{"status": "ok"}``).
-  POST /responses           — Main proxy endpoint.
-  POST /v1/responses        — Alias for compatibility with OpenAI SDK base-URL
-                              configurations that include the version prefix.
+Supported endpoints:
+  GET  /health        — Liveness probe.
+  POST /responses     — Main proxy endpoint.
+  POST /v1/responses  — Alias for OpenAI SDK base-URL compatibility.
 """
 
 from __future__ import annotations
@@ -58,33 +29,10 @@ def make_handler(
     session_store: SessionStore,
     translator: AbstractTranslator,
 ) -> type:
-    """
-    Create and return a ``BaseHTTPRequestHandler`` subclass with the given
-    dependencies baked in as class-level attributes.
-
-    This factory is called once at server startup.  The returned class is
-    passed to ``HTTPServer`` and re-instantiated on every incoming request,
-    but the dependencies are shared across all instances (thread-safe because
-    ``SessionStore`` uses an internal lock and ``Config`` is frozen).
-
-    Args:
-        config:        Immutable runtime configuration.
-        session_store: Thread-safe conversation history store.
-        translator:    Backend translator (e.g. ``DeepSeekTranslator``).
-
-    Returns:
-        A ``BaseHTTPRequestHandler`` subclass ready for use with ``HTTPServer``.
-    """
+    """Return a BaseHTTPRequestHandler subclass with dependencies baked in as class attributes."""
 
     class ProxyHandler(BaseHTTPRequestHandler):
-        """
-        Per-request HTTP handler for the llm-relay proxy.
-
-        Attributes (class-level, shared across all instances):
-            _config:        Runtime configuration.
-            _session_store: Conversation history repository.
-            _translator:    Backend translator implementation.
-        """
+        """Per-request HTTP handler for the llm-relay proxy."""
 
         _config:        Config              = config
         _session_store: SessionStore        = session_store
@@ -109,18 +57,7 @@ def make_handler(
         # ── POST /responses ───────────────────────────────────────────────────
 
         def do_POST(self) -> None:
-            """
-            Main proxy endpoint.
-
-            Pipeline:
-            1. Read and parse the request body.
-            2. Reconstruct conversation history from the session store.
-            3. Translate tools from Responses API format to Chat Completions.
-            4. Build and forward the backend request.
-            5. Parse the backend response.
-            6. Persist the updated session.
-            7. Return JSON or simulate SSE streaming.
-            """
+            """Proxy a Responses API request to the backend and return the translated response."""
             if self.path not in ("/responses", "/v1/responses"):
                 self.send_error(404, f"Unknown path: {self.path}")
                 return
@@ -203,29 +140,7 @@ def make_handler(
         # ── Session management ────────────────────────────────────────────────
 
         def _build_messages(self, req_data: dict) -> list:
-            """
-            Reconstruct the full conversation history for this request.
-
-            If ``previous_response_id`` is present and known to the session
-            store, the stored history is prepended to the new input items.
-            Otherwise, a fresh conversation is started (instructions included).
-
-            function_call deduplication
-            ---------------------------
-            The Responses API spec requires clients to echo the model's
-            ``function_call`` output items back in the next request's
-            ``input[]``, alongside the ``function_call_output`` results.
-            Because the session store already contains those tool calls as
-            the last assistant message, we drop any ``function_call`` items
-            from ``input[]`` when appending to existing history — keeping them
-            would produce a duplicate assistant/tool_calls message that
-            violates the Chat Completions ordering rule and triggers a 400.
-
-            History trimming: when the combined history exceeds
-            ``config.max_history_messages``, the oldest messages are discarded
-            while always preserving the system message at index 0 (so the
-            agent's identity and rules are never silently dropped).
-            """
+            """Reconstruct full conversation history, prepending session store if available."""
             prev_id = req_data.get("previous_response_id")
 
             if prev_id:
@@ -270,36 +185,13 @@ def make_handler(
         # ── SSE streaming ─────────────────────────────────────────────────────
 
         def _emit(self, event: str, data: dict) -> None:
-            """
-            Write a single Server-Sent Events frame to the response stream.
-
-            SSE format::
-
-                event: <name>\\n
-                data: <json>\\n
-                \\n
-            """
+            """Write a single SSE frame to the response stream."""
             frame = f"event: {event}\ndata: {json.dumps(data)}\n\n"
             self.wfile.write(frame.encode())
             self.wfile.flush()
 
         def _stream_response(self, response: dict, req_id: str) -> None:
-            """
-            Simulate an OpenAI Responses API SSE stream from a complete response.
-
-            Even though the backend was called in non-streaming mode, Codex CLI
-            expects the streaming event sequence.  We replay the completed
-            response as the exact sequence of events the real API would emit.
-
-            Event sequence per output item:
-              - ``response.created``
-              - For each item → ``response.output_item.added``
-                  - For text items → content_part.added / text.delta / text.done
-                                     / content_part.done
-                  - For tool calls → function_call_arguments.delta / .done
-              - For each item → ``response.output_item.done``
-              - ``response.completed``
-            """
+            """Simulate an OpenAI Responses API SSE stream from the completed response."""
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")

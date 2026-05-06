@@ -3,8 +3,10 @@ HTTP request handler for the llm-relay proxy.
 
 Supported endpoints:
   GET  /health        — Liveness probe.
-  POST /responses     — Main proxy endpoint.
+  GET  /v1/models     — Anthropic model list (Claude Desktop auto-discovery).
+  POST /responses     — Main proxy endpoint (OpenAI Responses API).
   POST /v1/responses  — Alias for OpenAI SDK base-URL compatibility.
+  POST /v1/messages   — Anthropic Messages API (Claude Code / Desktop).
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from http.server import BaseHTTPRequestHandler
 from urllib.error import HTTPError, URLError
 
 from llm_relay.config import Config
+from llm_relay.parsers.anthropic_messages import parse_anthropic_request
 from llm_relay.parsers.messages import input_to_messages, translate_tools
 from llm_relay.session.store import SessionStore
 from llm_relay.translators.base import AbstractTranslator
@@ -48,21 +51,54 @@ def make_handler(
         # ── GET /health ───────────────────────────────────────────────────────
 
         def do_GET(self) -> None:
-            """Health check endpoint — returns HTTP 200 with ``{"status":"ok"}``."""
+            """Health check + model list for auto-discovery."""
             if self.path == "/health":
                 self._send_json_direct({"status": "ok"})
+            elif self.path == "/v1/models":
+                self._handle_models()
             else:
                 self.send_error(404, f"Not found: {self.path}")
+
+        def _handle_models(self) -> None:
+            """Return available models in Anthropic format for auto-discovery."""
+            models = [
+                {
+                    "id": "deepseek-v4-pro",
+                    "object": "model",
+                    "created": 1735680000,
+                    "owned_by": "deepseek",
+                },
+                {
+                    "id": "deepseek-v4-flash",
+                    "object": "model",
+                    "created": 1735680000,
+                    "owned_by": "deepseek",
+                },
+                {
+                    "id": "deepseek-chat",
+                    "object": "model",
+                    "created": 1735680000,
+                    "owned_by": "deepseek",
+                },
+            ]
+            self._send_json_direct({"object": "list", "data": models})
 
         # ── POST /responses ───────────────────────────────────────────────────
 
         def do_POST(self) -> None:
-            """Proxy a Responses API request to the backend and return the translated response."""
-            if self.path not in ("/responses", "/v1/responses"):
+            """Proxy a request to the backend and return the translated response."""
+            if self.path in ("/responses", "/v1/responses"):
+                self._handle_responses()
+            elif self.path == "/v1/messages":
+                self._handle_anthropic()
+            else:
                 self.send_error(404, f"Unknown path: {self.path}")
-                return
 
-            # ── 1. Read body ──────────────────────────────────────────────────
+        # ── POST /responses ────────────────────────────────────────────────
+
+        def _handle_responses(self) -> None:
+            """Proxy a Responses API request to the backend."""
+            # ── 1. Read body
             length   = int(self.headers.get("Content-Length", 0))
             raw_body = self.rfile.read(length)
             req_id   = f"resp_{uuid.uuid4().hex[:24]}"
@@ -136,6 +172,68 @@ def make_handler(
                 self._stream_response(result.response, req_id)
             else:
                 self._send_json_direct(result.response, extra_headers={"x-request-id": req_id})
+
+        # ── POST /v1/messages ─────────────────────────────────────────────
+
+        def _handle_anthropic(self) -> None:
+            """Proxy an Anthropic Messages API request to the backend."""
+            length   = int(self.headers.get("Content-Length", 0))
+            raw_body = self.rfile.read(length)
+
+            try:
+                req_data = json.loads(raw_body)
+            except json.JSONDecodeError:
+                self.send_error(400, "Request body is not valid JSON")
+                return
+
+            parsed = parse_anthropic_request(req_data)
+            stream = parsed.stream
+
+            if self._config.debug:
+                print(
+                    f"\n{'=' * 60} [anthropic] {parsed.model}\n"
+                    f"  messages={len(parsed.messages)}  tools={len(parsed.tools or [])}"
+                    f"  stream={stream}  max_tokens={parsed.max_tokens}",
+                    file=sys.stderr,
+                )
+
+            try:
+                payload = self._translator.build_request(
+                    parsed.messages, parsed.tools, parsed.max_tokens,
+                    0,  # tc_count — the translator will decide based on context
+                    temperature=parsed.temperature,
+                    top_p=parsed.top_p,
+                )
+                raw_resp = self._translator.forward(json.dumps(payload).encode())
+                result   = self._translator.parse_response(
+                    raw_resp,
+                    f"msg_{uuid.uuid4().hex[:24]}",
+                )
+
+            except HTTPError as exc:
+                err_body = exc.read().decode("utf-8", errors="replace")
+                print(
+                    f"[llm-relay] Upstream HTTP {exc.code}: {err_body[:500]}",
+                    file=sys.stderr,
+                )
+                self.send_error(502, f"Upstream error: {exc.code}")
+                return
+
+            except URLError as exc:
+                print(f"[llm-relay] Connection error: {exc.reason}", file=sys.stderr)
+                self.send_error(502, f"Connection error: {exc.reason}")
+                return
+
+            except Exception as exc:
+                import traceback
+                traceback.print_exc(file=sys.stderr)
+                self.send_error(500, str(exc))
+                return
+
+            if stream:
+                self._stream_anthropic_response(result.response)
+            else:
+                self._send_json_direct(result.response)
 
         # ── Session management ────────────────────────────────────────────────
 
@@ -302,6 +400,102 @@ def make_handler(
                 "output_index": out_idx,
                 "item":         item,
             })
+
+        # ── Anthropic SSE streaming ──────────────────────────────────────────
+
+        def _stream_anthropic_response(self, response: dict) -> None:
+            """Simulate an Anthropic Messages SSE stream from the completed response."""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+
+            msg_id  = response.get("id", f"msg_{uuid.uuid4().hex[:12]}")
+            model   = response.get("model", "unknown")
+            output  = response.get("output", [])
+            usage   = response.get("usage", {})
+
+            # message_start
+            self._emit("message_start", {
+                "type": "message_start",
+                "message": {
+                    "id": msg_id,
+                    "type": "message",
+                    "role": "assistant",
+                    "model": model,
+                    "content": [],
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {
+                        "input_tokens": usage.get("input_tokens", 0),
+                        "output_tokens": 0,
+                    },
+                },
+            })
+
+            block_index = 0
+            for item in output:
+                item_type = item.get("type")
+
+                if item_type == "message":
+                    text = ""
+                    for part in item.get("content", []):
+                        if part.get("type") == "output_text":
+                            text += part.get("text", "")
+                    if text:
+                        self._emit("content_block_start", {
+                            "type": "content_block_start",
+                            "index": block_index,
+                            "content_block": {"type": "text", "text": ""},
+                        })
+                        self._emit("content_block_delta", {
+                            "type": "content_block_delta",
+                            "index": block_index,
+                            "delta": {"type": "text_delta", "text": text},
+                        })
+                        self._emit("content_block_stop", {
+                            "type": "content_block_stop",
+                            "index": block_index,
+                        })
+                        block_index += 1
+
+                elif item_type == "function_call":
+                    fn   = item.get("name", "")
+                    args = item.get("arguments", "")
+                    tool_id = item.get("call_id", f"toolu_{uuid.uuid4().hex[:12]}")
+                    try:
+                        tool_input = json.loads(args) if args else {}
+                    except json.JSONDecodeError:
+                        tool_input = {"arguments": args}
+
+                    self._emit("content_block_start", {
+                        "type": "content_block_start",
+                        "index": block_index,
+                        "content_block": {"type": "tool_use", "id": tool_id, "name": fn, "input": {}},
+                    })
+                    # Send the input JSON delta
+                    input_json = json.dumps(tool_input)
+                    self._emit("content_block_delta", {
+                        "type": "content_block_delta",
+                        "index": block_index,
+                        "delta": {"type": "input_json_delta", "partial_json": input_json},
+                    })
+                    self._emit("content_block_stop", {
+                        "type": "content_block_stop",
+                        "index": block_index,
+                    })
+                    block_index += 1
+
+            # message_delta
+            self._emit("message_delta", {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {"output_tokens": usage.get("output_tokens", 0)},
+            })
+
+            # message_stop
+            self._emit("message_stop", {"type": "message_stop"})
 
         # ── Response helpers ──────────────────────────────────────────────────
 

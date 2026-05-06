@@ -83,6 +83,9 @@ class Config:
     debug:              bool
     max_output_tokens:  int
 
+    api_base_url:  str | None = None   # override translator default base URL
+    model:         str | None = None   # override translator default model
+
     max_history_messages: int = field(default=_DEFAULT_MAX_HISTORY_MESSAGES)
     history_trim_to:      int = field(default=_DEFAULT_HISTORY_TRIM_TO)
     max_sessions:         int = field(default=_DEFAULT_MAX_SESSIONS)
@@ -112,6 +115,8 @@ class Config:
             max_output_tokens=int(
                 os.environ.get("LLM_RELAY_MAX_TOKENS", _DEFAULT_MAX_OUTPUT_TOKENS)
             ),
+            api_base_url=os.environ.get("LLM_RELAY_API_BASE_URL") or None,
+            model=os.environ.get("LLM_RELAY_MODEL") or None,
         )
 
     def redacted(self) -> str:

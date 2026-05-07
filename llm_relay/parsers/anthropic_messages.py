@@ -168,9 +168,8 @@ def _handle_user_blocks(messages: list[dict], blocks: list[dict]) -> None:
         else:
             text_parts.append(str(block))
 
-    if text_parts:
-        messages.append({"role": "user", "content": "\n".join(text_parts)})
-
+    # Tool results MUST come before any text message: Chat Completions
+    # requires tool messages immediately after the assistant tool_calls.
     for tr in tool_results:
         tc = tr.get("content", "")
         if isinstance(tc, list):
@@ -183,6 +182,9 @@ def _handle_user_blocks(messages: list[dict], blocks: list[dict]) -> None:
             "tool_call_id": tr.get("tool_use_id", ""),
             "content":      str(tc),
         })
+
+    if text_parts:
+        messages.append({"role": "user", "content": "\n".join(text_parts)})
 
 
 def _handle_assistant_blocks(messages: list[dict], blocks: list[dict]) -> None:

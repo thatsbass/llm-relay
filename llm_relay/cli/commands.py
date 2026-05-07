@@ -20,17 +20,17 @@ _REPO = "https://github.com/thatsbass/llm-relay.git"
 # ── start ─────────────────────────────────────────────────────────────────────
 
 
-def cmd_start() -> None:
+def cmd_start(tls: bool = False, port: int | None = None) -> None:
     """Start the proxy, running setup first if not yet configured."""
     relay_cfg = config_manager.load()
     if not relay_cfg or not relay_cfg.api_key.strip():
         print("No configuration found — running setup first.\n")
         relay_cfg = _run_wizard()
 
-    _run(relay_cfg)
+    _run(relay_cfg, tls=tls, port=port)
 
 
-def _run(relay_cfg: RelayConfig) -> None:
+def _run(relay_cfg: RelayConfig, tls: bool = False, port: int | None = None) -> None:
     """Wire relay config into the proxy stack and start serving."""
     # Inject the API key into the environment so Config.from_env() picks it up.
     os.environ[relay_cfg.env_key_name()] = relay_cfg.api_key
@@ -42,6 +42,12 @@ def _run(relay_cfg: RelayConfig) -> None:
         fb_key = fb_info.get("env_key", "")
         if fb_key and relay_cfg.fallback_api_key:
             os.environ[fb_key] = relay_cfg.fallback_api_key
+
+    if tls:
+        os.environ["LLM_RELAY_TLS"] = "1"
+
+    if port is not None:
+        os.environ["LLM_RELAY_PORT"] = str(port)
 
     # Import here (not at module top) so ``cmd_stop`` / ``cmd_status`` never
     # pay the cost of importing the full server stack.
@@ -76,7 +82,8 @@ def _run(relay_cfg: RelayConfig) -> None:
     # ── Startup banner ────────────────────────────────────────────────────────
 
     print()
-    _ok(f"Proxy running  →  {relay_cfg.base_url()}")
+    scheme = "https" if tls else "http"
+    _ok(f"Proxy running  →  {scheme}://127.0.0.1:{relay_cfg.port}")
     _ok(f"Backend        →  {relay_cfg.provider_display()}")
     if relay_cfg.fallback_provider:
         fb_name = config_manager.PROVIDERS.get(
@@ -250,3 +257,14 @@ def _die(msg: str) -> None:
     """Print an error message and exit with code 1."""
     print(f"  \033[31m✗\033[0m {msg}", file=sys.stderr)
     sys.exit(1)
+
+
+# ── trust-ca ──────────────────────────────────────────────────────────────────
+
+
+def cmd_trust_ca() -> None:
+    """Install the local CA certificate in the system trust store."""
+    from llm_relay.server.tls import install_ca_trust
+    print()
+    install_ca_trust()
+    print()

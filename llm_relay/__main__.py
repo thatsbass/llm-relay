@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from llm_relay import __version__
@@ -15,17 +16,19 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="llm-relay",
         description=(
-            "Local proxy that translates the OpenAI Responses API "
-            "to any OpenAI-compatible LLM backend (DeepSeek, …)."
+            "Local proxy that translates OpenAI Responses API "
+            "and Anthropic Messages API to any LLM backend."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 examples:
   llm-relay                     start proxy (wizard on first run)
   llm-relay start               start proxy
+  llm-relay start --tls         start proxy with HTTPS (for Claude Desktop 3P)
   llm-relay stop                stop proxy running in another terminal
   llm-relay status              show running state and config
   llm-relay setup               re-run setup wizard
+  llm-relay trust-ca            install the CA cert in system trust store
   llm-relay update              upgrade to the latest version
   llm-relay config port 9000    change port
   llm-relay config key sk-xxx   update API key
@@ -40,9 +43,20 @@ examples:
 
     subparsers = parser.add_subparsers(dest="command", metavar="<command>")
 
-    subparsers.add_parser(
+    start_p = subparsers.add_parser(
         "start",
         help="Start the proxy in the foreground",
+    )
+    start_p.add_argument(
+        "--tls",
+        action="store_true",
+        help="Enable HTTPS with a self-signed certificate (for Claude Desktop 3P)",
+    )
+    start_p.add_argument(
+        "--port", "-p",
+        type=int,
+        default=None,
+        help="Port to listen on (default: 8080)",
     )
     subparsers.add_parser(
         "stop",
@@ -55,6 +69,10 @@ examples:
     subparsers.add_parser(
         "setup",
         help="Re-run the interactive setup wizard",
+    )
+    subparsers.add_parser(
+        "trust-ca",
+        help="Install the local CA certificate in the system trust store (for HTTPS)",
     )
     subparsers.add_parser(
         "update",
@@ -95,6 +113,7 @@ def main() -> None:
         cmd_start,
         cmd_status,
         cmd_stop,
+        cmd_trust_ca,
         cmd_update,
     )
 
@@ -107,6 +126,9 @@ def main() -> None:
     elif args.command == "setup":
         cmd_setup()
 
+    elif args.command == "trust-ca":
+        cmd_trust_ca()
+
     elif args.command == "update":
         cmd_update()
 
@@ -115,7 +137,11 @@ def main() -> None:
 
     else:
         # ``start`` or no subcommand — both start the proxy.
-        cmd_start()
+        tls = getattr(args, "tls", False) or os.environ.get(
+            "LLM_RELAY_TLS", ""
+        ).lower() in ("1", "true", "yes")
+        port = getattr(args, "port", None)
+        cmd_start(tls=tls, port=port)
 
 
 if __name__ == "__main__":

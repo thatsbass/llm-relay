@@ -1,118 +1,270 @@
-"""Self-signed TLS certificate generation for localhost.
+"""Mini-PKI for localhost HTTPS — required by Claude Desktop 3P.
 
-Used when Claude Desktop 3P requires an ``https://`` gateway URL
-but the proxy only listens on localhost.
+Claude Desktop rejects self-signed certificates.  We need a proper
+Certificate Authority (CA) trusted by the OS so Electron accepts the
+TLS connection.  This module generates a private CA, installs it in
+the system trust store, and issues a localhost certificate signed by
+that CA.
 """
 
 from __future__ import annotations
 
 import os
+import platform
 import ssl
-import tempfile
+import subprocess
+import sys
 from pathlib import Path
 
 
-_CERT_DIR = Path.home() / ".llm-relay" / "tls"
-_CERT_FILE = _CERT_DIR / "cert.pem"
-_KEY_FILE  = _CERT_DIR / "key.pem"
+_CERT_DIR  = Path.home() / ".llm-relay" / "tls"
+_CA_KEY    = _CERT_DIR / "ca-key.pem"
+_CA_CERT   = _CERT_DIR / "ca-cert.pem"
+_SRV_KEY   = _CERT_DIR / "key.pem"
+_SRV_CERT  = _CERT_DIR / "cert.pem"
+_CSR       = _CERT_DIR / "server.csr"
+_SRL       = _CERT_DIR / "ca-cert.srl"
+
+_CA_NAME   = "/CN=llm-relay CA"
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
 
 
 def ensure_certificate() -> tuple[str, str]:
-    """Return ``(cert_path, key_path)``, generating a self-signed pair if needed.
+    """Return ``(cert_path, key_path)`` for the localhost server certificate.
 
-    The certificate is valid for **127.0.0.1** and **localhost** so both
-    the IP and the hostname are accepted by Claude Desktop.
+    On first call:
+      1.  Creates a private CA if one does not already exist.
+      2.  Issues a localhost certificate signed by the CA.
+      3.  Installs the CA in the system trust store (may prompt for password).
+
+    Subsequent calls are instantaneous (files already exist).
     """
     _CERT_DIR.mkdir(parents=True, exist_ok=True)
 
-    if _CERT_FILE.exists() and _KEY_FILE.exists():
-        return str(_CERT_FILE), str(_KEY_FILE)
+    missing = any(
+        not p.exists() for p in (_CA_KEY, _CA_CERT, _SRV_KEY, _SRV_CERT)
+    )
 
-    # Generate via openssl (available on macOS / most Linux distros).
-    # Fall back to a pure-Python approach if openssl is not found.
-    try:
-        _generate_with_openssl()
-    except Exception:
-        _generate_with_cryptography()
+    if missing:
+        _generate_ca()
+        _generate_server_cert()
+        _install_ca()
 
-    return str(_CERT_FILE), str(_KEY_FILE)
+    return str(_SRV_CERT), str(_SRV_KEY)
+
+
+def install_ca_trust() -> None:
+    """Re-install the CA certificate in the system trust store.
+
+    Useful as a standalone command (``llm-relay trust-ca``) or when the
+    user prompted for a password but dismissed it on first run.
+    """
+    _CERT_DIR.mkdir(parents=True, exist_ok=True)
+    if not _CA_CERT.exists():
+        _generate_ca()
+    _install_ca()
 
 
 def create_ssl_context() -> ssl.SSLContext:
-    """Return an SSLContext configured with the self-signed certificate."""
+    """Return an SSLContext configured with the localhost certificate."""
     cert_path, key_path = ensure_certificate()
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(cert_path, key_path)
     return ctx
 
 
-# ── OpenSSL path ──────────────────────────────────────────────────────────────
+# ── Certificate generation ────────────────────────────────────────────────────
 
 
-def _generate_with_openssl() -> None:
-    import subprocess
-
-    subprocess.run(
-        [
-            "openssl", "req", "-x509", "-newkey", "rsa:2048",
-            "-keyout", str(_KEY_FILE),
-            "-out", str(_CERT_FILE),
-            "-days", "365", "-nodes",
-            "-subj", "/CN=localhost",
-            "-addext", "subjectAltName=IP:127.0.0.1,DNS:localhost",
-        ],
-        check=True,
-        capture_output=True,
+def _generate_ca() -> None:
+    """Create a private Certificate Authority (key + self-signed cert)."""
+    _run_openssl(
+        "genrsa", "-out", str(_CA_KEY), "2048",
+    )
+    _run_openssl(
+        "req", "-x509", "-new", "-nodes",
+        "-key", str(_CA_KEY),
+        "-sha256", "-days", "3650",
+        "-subj", _CA_NAME,
+        "-out", str(_CA_CERT),
     )
 
 
-# ── Pure-Python fallback ─────────────────────────────────────────────────────
+def _generate_server_cert() -> None:
+    """Issue a localhost certificate signed by the private CA."""
+    # Server key
+    _run_openssl("genrsa", "-out", str(_SRV_KEY), "2048")
+
+    # CSR
+    _run_openssl(
+        "req", "-new",
+        "-key", str(_SRV_KEY),
+        "-subj", "/CN=localhost",
+        "-out", str(_CSR),
+    )
+
+    # Sign with CA (SAN extension for 127.0.0.1 and localhost)
+    _run_openssl(
+        "x509", "-req",
+        "-in", str(_CSR),
+        "-CA", str(_CA_CERT),
+        "-CAkey", str(_CA_KEY),
+        "-CAcreateserial",
+        "-out", str(_SRV_CERT),
+        "-days", "365",
+        "-sha256",
+        "-extfile", _san_ext_file(),
+    )
+
+    # Cleanup
+    _CSR.unlink(missing_ok=True)
 
 
-def _generate_with_cryptography() -> None:
-    """Generate a self-signed cert using the ``cryptography`` library if available."""
-    try:
-        from cryptography import x509
-        from cryptography.x509.oid import NameOID
-        from cryptography.hazmat.primitives import hashes, serialization
-        from cryptography.hazmat.primitives.asymmetric import rsa
-    except ImportError:
-        _generate_minimal_cert()
+def _san_ext_file() -> str:
+    """Write a temporary OpenSSL extension file with subjectAltName."""
+    path = _CERT_DIR / "san.ext"
+    path.write_text(
+        "subjectAltName=IP:127.0.0.1,DNS:localhost\n"
+    )
+    return str(path)
+
+
+# ── System trust store ────────────────────────────────────────────────────────
+
+
+def _install_ca() -> None:
+    """Add the CA certificate to the OS trust store."""
+    system = platform.system()
+    if system == "Darwin":
+        _install_ca_macos()
+    elif system == "Linux":
+        _install_ca_linux()
+    elif system == "Windows":
+        _install_ca_windows()
+    else:
+        _warn_manual_install()
+
+
+def _install_ca_macos() -> None:
+    """Add the CA to the system trust store on macOS."""
+    ca_path = str(_CA_CERT)
+
+    # 1. Try sudo to the System keychain first (works in terminal, not GUI).
+    result = subprocess.run(
+        [
+            "sudo", "security", "add-trusted-cert",
+            "-d", "-r", "trustRoot", "-p", "ssl",
+            "-k", "/Library/Keychains/System.keychain",
+            ca_path,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode == 0:
+        _ok("CA certificate installed in System keychain (trusted for TLS)")
         return
 
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    # 2. Try the user keychain (may prompt a GUI dialog).
+    result = subprocess.run(
+        [
+            "security", "add-trusted-cert",
+            "-d", "-r", "trustRoot", "-p", "ssl",
+            "-k", str(Path.home() / "Library" / "Keychains" / "login.keychain-db"),
+            ca_path,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    if result.returncode == 0:
+        _ok("CA certificate installed in login keychain (trusted for TLS)")
+        return
 
-    subject = issuer = x509.Name([
-        x509.NameAttribute(NameOID.COMMON_NAME, "localhost"),
-    ])
+    # 3. None of the above worked — show manual instructions.
+    _print_macos_manual_install(ca_path)
 
-    cert = (
-        x509.CertificateBuilder()
-        .subject_name(subject)
-        .issuer_name(issuer)
-        .public_key(key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(x509.datetime.utcnow())
-        .not_valid_after(x509.datetime.utcnow() + x509.timedelta(days=365))
-        .add_extension(
-            x509.SubjectAlternativeName([
-                x509.IPAddress("127.0.0.1"),
-                x509.DNSName("localhost"),
-            ]),
-            critical=False,
+
+def _install_ca_linux() -> None:
+    ca_path = str(_CA_CERT)
+    dest = Path("/usr/local/share/ca-certificates/llm-relay-ca.crt")
+    try:
+        dest.write_bytes(_CA_CERT.read_bytes())
+        subprocess.run(["update-ca-certificates"], check=True)
+        _ok("CA certificate installed (system trust store)")
+    except Exception:
+        print(
+            f"\n  \033[33m⚠\033[0m  Manual CA install required:\n"
+            f"    sudo cp {ca_path} /usr/local/share/ca-certificates/llm-relay-ca.crt\n"
+            f"    sudo update-ca-certificates\n",
+            file=sys.stderr,
         )
-        .sign(key, hashes.SHA256())
+
+
+def _install_ca_windows() -> None:
+    ca_path = str(_CA_CERT)
+    try:
+        subprocess.run(
+            ["certutil", "-addstore", "Root", ca_path],
+            check=True,
+            capture_output=True,
+        )
+        _ok("CA certificate installed (Windows trust store)")
+    except Exception:
+        print(
+            f"\n  \033[33m⚠\033[0m  Run this in an Administrator terminal:\n"
+            f"    certutil -addstore Root {ca_path}\n",
+            file=sys.stderr,
+        )
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def _run_openssl(*args: str) -> None:
+    """Run an openssl command, raising a clear error on failure."""
+    try:
+        subprocess.run(
+            ["openssl", *args],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f"openssl failed: {exc.stderr.strip()}\n"
+            f"  Command: openssl {' '.join(args)}"
+        ) from exc
+    except FileNotFoundError:
+        raise RuntimeError(
+            "openssl is not installed. Install it with:\n"
+            "  brew install openssl    (macOS)\n"
+            "  apt install openssl     (Linux)"
+        )
+
+
+def _warn_manual_install() -> None:
+    ca_path = str(_CA_CERT)
+    _print_macos_manual_install(ca_path)
+
+
+def _print_macos_manual_install(ca_path: str) -> None:
+    print(
+        f"\n  \033[33m⚠\033[0m  The CA certificate could not be auto-installed.\n"
+        f"\n  Run this command once to trust the proxy:\n"
+        f"\n    \033[1msudo security add-trusted-cert"
+        f" -d -r trustRoot -p ssl"
+        f" -k /Library/Keychains/System.keychain"
+        f" {ca_path}\033[0m\n"
+        f"\n  Or open Keychain Access, drag"
+        f" \033[1m{ca_path}\033[0m into the System keychain,\n"
+        f"  double-click the 'llm-relay CA' entry, expand Trust,"
+        f" and set to 'Always Trust'.\n",
+        file=sys.stderr,
     )
 
-    _KEY_FILE.write_bytes(key.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.TraditionalOpenSSL,
-        encryption_algorithm=serialization.NoEncryption(),
-    ))
-    _CERT_FILE.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
 
-
-def _generate_minimal_cert() -> None:
-    """Absolute fallback — writes a placeholder that clearly won't work, but at least the server starts."""
-    _KEY_FILE.write_text("PLACEHOLDER — install openssl or cryptography")
-    _CERT_FILE.write_text("PLACEHOLDER — install openssl or cryptography")
+def _ok(msg: str) -> None:
+    print(f"  \033[32m✓\033[0m {msg}")

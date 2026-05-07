@@ -85,6 +85,7 @@ class Config:
 
     api_base_url:  str | None = None   # override translator default base URL
     model:         str | None = None   # override translator default model
+    tls:           bool       = False  # enable HTTPS (self-signed cert)
 
     max_history_messages: int = field(default=_DEFAULT_MAX_HISTORY_MESSAGES)
     history_trim_to:      int = field(default=_DEFAULT_HISTORY_TRIM_TO)
@@ -117,6 +118,7 @@ class Config:
             ),
             api_base_url=os.environ.get("LLM_RELAY_API_BASE_URL") or None,
             model=os.environ.get("LLM_RELAY_MODEL") or None,
+            tls=os.environ.get("LLM_RELAY_TLS", "").lower() in ("1", "true", "yes"),
         )
 
     def redacted(self) -> str:

@@ -162,14 +162,14 @@ def _install_ca_macos() -> None:
     print("  Adding CA to System keychain (a macOS dialog will appear)...")
     script = (
         f'do shell script "security add-trusted-cert -d -r trustRoot'
-        f' -p ssl -k /Library/Keychains/System.keychain'
-        f' {ca_path}"'
+        f' -p ssl -k /Library/Keychains/System.keychain {ca_path}'  # noqa
+        f' && echo OK"'
         f' with administrator privileges'
     )
     result = subprocess.run(
         ["osascript", "-e", script],
-        capture_output=True,
-        text=True,
+        # Do NOT capture output — the admin dialog needs GUI access.
+        timeout=60,
     )
     if result.returncode == 0:
         _ok("CA certificate installed in System keychain")
@@ -259,16 +259,13 @@ def _warn_manual_install() -> None:
 
 def _print_macos_manual_install(ca_path: str) -> None:
     print(
-        f"\n  \033[33m⚠\033[0m  The CA certificate could not be auto-installed.\n"
-        f"\n  Run this command once to trust the proxy:\n"
+        f"\n  \033[31m✗\033[0m  CA cert could not be auto-installed.\n"
+        f"\n  Run this command once (it will ask for your macOS password):\n"
         f"\n    \033[1msudo security add-trusted-cert"
         f" -d -r trustRoot -p ssl"
         f" -k /Library/Keychains/System.keychain"
-        f" {ca_path}\033[0m\n"
-        f"\n  Or open Keychain Access, drag"
-        f" \033[1m{ca_path}\033[0m into the System keychain,\n"
-        f"  double-click the 'llm-relay CA' entry, expand Trust,"
-        f" and set to 'Always Trust'.\n",
+        f" \\\n        {ca_path}\033[0m\n"
+        f"\n  Then restart Claude Desktop.\n",
         file=sys.stderr,
     )
 

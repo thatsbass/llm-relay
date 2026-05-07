@@ -19,6 +19,7 @@ from llm_relay.cli.wizard import run as _run_wizard
 _REPO   = "https://github.com/thatsbass/llm-relay.git"
 _LOG_FILE = Path.home() / ".llm-relay" / "proxy.log"
 _CLAUDE_ENV = Path.home() / ".llm-relay" / "claude-code.env"
+_CLAUDE_BIN = Path.home() / ".llm-relay" / "bin" / "claude"
 
 
 # ── start ─────────────────────────────────────────────────────────────────────
@@ -427,7 +428,6 @@ def cmd_claude(mode: str) -> None:
 
     if mode == "proxy":
         _write_claude_env(config_manager.load().provider if config_manager.load() else "deepseek")
-        _ok("Claude Code configured to use llm-relay proxy")
     else:
         api_key = os.environ.get("ANTHROPIC_AUTH_TOKEN", "").strip()
         if not api_key:
@@ -435,7 +435,6 @@ def cmd_claude(mode: str) -> None:
             if not api_key:
                 _die("API key required for direct Anthropic access")
 
-        _CLAUDE_ENV.parent.mkdir(parents=True, exist_ok=True)
         _CLAUDE_ENV.write_text(f"""# llm-relay — Claude Code (Anthropic direct)
 export ANTHROPIC_BASE_URL="https://api.anthropic.com"
 export ANTHROPIC_AUTH_TOKEN="{api_key}"
@@ -447,9 +446,29 @@ unset ANTHROPIC_DEFAULT_HAIKU_MODEL
 unset CLAUDE_CODE_SUBAGENT_MODEL
 unset CLAUDE_CODE_EFFORT_LEVEL
 """, encoding="utf-8")
-        _ok("Claude Code configured to use Anthropic directly")
 
-    print(f"  Source to apply:  source ~/.llm-relay/claude-code.env")
+    # Write a wrapper so "claude" always sources the env first.
+    _CLAUDE_BIN.parent.mkdir(parents=True, exist_ok=True)
+    _CLAUDE_BIN.write_text("""#!/bin/bash
+# llm-relay — Claude Code wrapper (auto-sources env)
+source "$HOME/.llm-relay/claude-code.env"
+
+# Find the real claude binary, skipping this wrapper.
+real=""
+for p in $(echo "$PATH" | tr ':' '\\n'); do
+    [ "$p" = "$HOME/.llm-relay/bin" ] && continue
+    if [ -x "$p/claude" ]; then real="$p/claude"; break; fi
+done
+exec "${real:-claude}" "$@"
+""")
+    _CLAUDE_BIN.chmod(0o755)
+
+    # Ensure ~/.llm-relay/bin is in PATH via shell profile.
+    _patch_path()
+
+    label = "proxy" if mode == "proxy" else "Anthropic direct"
+    _ok(f"Claude Code → {label}")
+    print(f"  Just type \033[1mclaude\033[0m — it will use the right config automatically.")
     print()
 
 
@@ -473,6 +492,42 @@ def cmd_logs(lines: int = 20, follow: bool = False) -> None:
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
+
+
+def _patch_path() -> None:
+    """Add ~/.llm-relay/bin to PATH in the shell profile."""
+    bin_dir = Path.home() / ".llm-relay" / "bin"
+    marker = ".llm-relay/bin"
+    export_line = f'export PATH="{bin_dir}:$PATH"  # llm-relay'
+
+    shell = os.path.basename(os.environ.get("SHELL", ""))
+    home = Path.home()
+
+    if shell == "zsh":
+        profile = home / ".zshrc"
+    elif shell == "bash":
+        for name in (".bashrc", ".bash_profile", ".profile"):
+            if (home / name).exists():
+                profile = home / name
+                break
+        else:
+            profile = home / ".bashrc"
+    else:
+        return
+
+    try:
+        existing = profile.read_text(encoding="utf-8") if profile.exists() else ""
+    except OSError:
+        return
+
+    if marker in existing:
+        return  # already patched
+
+    try:
+        with open(profile, "a", encoding="utf-8") as f:
+            f.write(f"\n{export_line}\n")
+    except OSError:
+        pass
 
 
 def _write_claude_env(provider: str) -> None:

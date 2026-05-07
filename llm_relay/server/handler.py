@@ -53,9 +53,10 @@ def make_handler(
 
         def do_GET(self) -> None:
             """Health check + model list for auto-discovery."""
-            if self.path == "/health":
+            path = self.path.split("?")[0]
+            if path == "/health":
                 self._send_json_direct({"status": "ok"})
-            elif self.path == "/v1/models":
+            elif path == "/v1/models":
                 self._handle_models()
             else:
                 self.send_error(404, f"Not found: {self.path}")
@@ -88,9 +89,10 @@ def make_handler(
 
         def do_POST(self) -> None:
             """Proxy a request to the backend and return the translated response."""
-            if self.path in ("/responses", "/v1/responses"):
+            path = self.path.split("?")[0]
+            if path in ("/responses", "/v1/responses"):
                 self._handle_responses()
-            elif self.path == "/v1/messages":
+            elif path == "/v1/messages":
                 self._handle_anthropic()
             else:
                 self.send_error(404, f"Unknown path: {self.path}")

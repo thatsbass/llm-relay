@@ -172,72 +172,12 @@ def make_handler(
 
             # ── 7. Respond to client ──────────────────────────────────────────
             if stream:
-                self._stream_response(result.response, req_id)
+                if self._config.debug:
+                    print(f"  → sending simulated SSE stream", file=sys.stderr)
+                self._stream_anthropic_response(result.response)
             else:
-                self._send_json_direct(result.response, extra_headers={"x-request-id": req_id})
-
-        # ── POST /v1/messages ─────────────────────────────────────────────
-
-        def _handle_anthropic(self) -> None:
-            """Proxy an Anthropic Messages API request to the backend."""
-            length   = int(self.headers.get("Content-Length", 0))
-            raw_body = self.rfile.read(length)
-
-            try:
-                req_data = json.loads(raw_body)
-            except json.JSONDecodeError:
-                self.send_error(400, "Request body is not valid JSON")
-                return
-
-            parsed = parse_anthropic_request(req_data)
-            stream = parsed.stream
-
-            if self._config.debug:
-                print(
-                    f"\n{'=' * 60} [anthropic] {parsed.model}\n"
-                    f"  messages={len(parsed.messages)}  tools={len(parsed.tools or [])}"
-                    f"  stream={stream}  max_tokens={parsed.max_tokens}",
-                    file=sys.stderr,
-                )
-
-            # ── Pass-through path: backend speaks Anthropic natively ──────
-            if self._routing.has_pass_through():
-                try:
-                    payload = self._routing.build_anthropic_request(req_data)
-                    raw_resp = self._routing.forward(payload)
-                    result = self._routing.parse_anthropic_response(
-                        raw_resp, f"msg_{uuid.uuid4().hex[:24]}",
-                    )
-                except HTTPError as exc:
-                    err_body = exc.read().decode("utf-8", errors="replace")
-                    print(
-                        f"[llm-relay] Upstream HTTP {exc.code}: {err_body[:500]}",
-                        file=sys.stderr,
-                    )
-                    self.send_error(502, f"Upstream error: {exc.code}")
-                    return
-                except URLError as exc:
-                    print(
-                        f"[llm-relay] Connection error: {exc.reason}",
-                        file=sys.stderr,
-                    )
-                    self.send_error(502, f"Connection error: {exc.reason}")
-                    return
-                except Exception as exc:
-                    import traceback
-                    traceback.print_exc(file=sys.stderr)
-                    self.send_error(500, str(exc))
-                    return
-
-                if stream and getattr(
-                    self._routing, "supports_anthropic_stream_relay", False
-                ):
-                    self._stream_anthropic_response(result.response)
-                elif stream:
-                    self._stream_anthropic_response(result.response)
-                else:
-                    self._send_json_direct(result.response)
-                return
+                self._send_json_direct(result.response)
+            return
 
             # ── Translation path: Anthropic → Chat Completions ────────────
             try:
@@ -247,6 +187,12 @@ def make_handler(
                     temperature=parsed.temperature,
                     top_p=parsed.top_p,
                 )
+                if self._config.debug:
+                    print(
+                        f"  [translate] forwarding to"
+                        f" {self._routing.primary._full_url()}",
+                        file=sys.stderr,
+                    )
                 raw_resp = self._routing.forward(json.dumps(payload).encode())
                 result   = self._routing.parse_response(
                     raw_resp,
@@ -271,6 +217,8 @@ def make_handler(
                 return
 
             if stream:
+                if self._config.debug:
+                    print(f"  → sending simulated SSE stream", file=sys.stderr)
                 self._stream_anthropic_response(result.response)
             else:
                 self._send_json_direct(result.response)

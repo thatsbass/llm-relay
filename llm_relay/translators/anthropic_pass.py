@@ -60,20 +60,48 @@ class AnthropicPassThroughTranslator(AbstractTranslator):
         )
 
     def build_anthropic_request(self, original_body: dict) -> bytes:
-        """Return the original body as JSON bytes — no transformation needed."""
-        return json.dumps(original_body).encode()
+        """Forward the original body, forcing non-streaming mode.
+
+        We receive the full response as JSON, then the handler simulates
+        SSE events for the client.  This avoids having to parse raw SSE
+        from the backend.
+        """
+        body = dict(original_body)
+        body["stream"] = False
+        return json.dumps(body).encode()
 
     def parse_anthropic_response(
         self, raw_body: bytes, req_id: str
     ) -> ParsedResponse:
-        """Convert an Anthropic Messages response into a ParsedResponse.
-
-        The returned ``response`` dict is a thin envelope.  The handler
-        uses ``output[]``-style fields for its own SSE simulation in the
-        Chat Completions path; for the pass-through path we build a
-        lightweight structure that the Anthropic SSE relay can consume.
-        """
+        """Convert an Anthropic Messages response into a ParsedResponse."""
         data = self._safe_load(raw_body)
+
+        # Handle error responses gracefully.
+        if "error" in data:
+            err = data["error"]
+            error_response = {
+                "id":     req_id,
+                "object": "response",
+                "status": "failed",
+                "model":  "unknown",
+                "output": [{
+                    "type":    "message",
+                    "role":    "assistant",
+                    "content": [{
+                        "type":        "output_text",
+                        "text":        f"[Backend error] {err.get('message', str(err))}",
+                        "annotations": [],
+                    }],
+                }],
+                "text": "",
+                "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+                          "input_tokens_details": {"cached_tokens": 0},
+                          "output_tokens_details": {"reasoning_tokens": 0}},
+            }
+            return ParsedResponse(
+                response=error_response,
+                assistant_message={"role": "assistant", "content": f"Error: {err.get('message')}"},
+            )
 
         content = data.get("content", [])
         output: list = []
@@ -85,8 +113,8 @@ class AnthropicPassThroughTranslator(AbstractTranslator):
                     "type":    "message",
                     "role":    "assistant",
                     "content": [{
-                        "type": "output_text",
-                        "text": block.get("text", ""),
+                        "type":        "output_text",
+                        "text":        block.get("text", ""),
                         "annotations": [],
                     }],
                 })
@@ -105,7 +133,10 @@ class AnthropicPassThroughTranslator(AbstractTranslator):
             "id":                  req_id,
             "object":              "response",
             "status":              "completed",
-            "model":               data.get("model", self.DEFAULT_MODEL),
+            # Claude Desktop expects a recognizable model name in the
+            # SSE message_start event.  Use what the backend returned;
+            # DeepSeek /anthropic maps unknown models to deepseek-v4-flash.
+            "model":               data.get("model", "deepseek-v4-flash"),
             "output":              output,
             "parallel_tool_calls": True,
             "text":                "",
@@ -117,6 +148,8 @@ class AnthropicPassThroughTranslator(AbstractTranslator):
                 "input_tokens_details":  {"cached_tokens": usage.get("cache_read_input_tokens", 0)},
                 "output_tokens_details": {"reasoning_tokens": 0},
             },
+            # Keep the raw fallback for debugging.
+            "_anthropic_raw": data,
         }
 
         assistant_message = self._build_assistant_message(content)

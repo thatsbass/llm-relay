@@ -28,6 +28,14 @@ PROVIDERS: dict[str, dict] = {
         "display": "DeepSeek",
         "env_key": "DEEPSEEK_API_KEY",
     },
+    "deepseek-anthropic": {
+        "display": "DeepSeek (Anthropic API)",
+        "env_key": "DEEPSEEK_API_KEY",
+    },
+    "opencode": {
+        "display": "OpenCode Go",
+        "env_key": "OPENCODE_API_KEY",
+    },
 }
 
 
@@ -41,6 +49,8 @@ class RelayConfig:
     port:     int
     provider: str
     api_key:  str
+    fallback_provider: str = ""
+    fallback_api_key:  str = ""
 
     # ── Derived helpers ───────────────────────────────────────────────────────
 
@@ -77,6 +87,8 @@ def load() -> Optional[RelayConfig]:
             port=int(data["port"]),
             provider=str(data["provider"]),
             api_key=str(data["api_key"]),
+            fallback_provider=str(data.get("fallback_provider", "")),
+            fallback_api_key=str(data.get("fallback_api_key", "")),
         )
     except (json.JSONDecodeError, KeyError, ValueError):
         return None
@@ -113,6 +125,11 @@ def _write_env(config: RelayConfig) -> None:
         "#   source ~/.llm-relay/.env",
         "",
         f'export {env_key}="{config.api_key}"',
-        f'export OPENAI_BASE_URL="{config.base_url()}"',
     ]
+    if config.fallback_provider:
+        fb_info = PROVIDERS.get(config.fallback_provider, {})
+        fb_key = fb_info.get("env_key", "FALLBACK_API_KEY")
+        lines.append(f'export {fb_key}="{config.fallback_api_key}"')
+        lines.append(f'export LLM_RELAY_FALLBACK_BACKEND="{config.fallback_provider}"')
+    lines.append(f'export OPENAI_BASE_URL="{config.base_url()}"')
     ENV_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")

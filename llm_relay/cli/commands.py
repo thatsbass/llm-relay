@@ -35,6 +35,14 @@ def _run(relay_cfg: RelayConfig) -> None:
     # Inject the API key into the environment so Config.from_env() picks it up.
     os.environ[relay_cfg.env_key_name()] = relay_cfg.api_key
 
+    # Inject fallback config if set.
+    if relay_cfg.fallback_provider:
+        os.environ["LLM_RELAY_FALLBACK_BACKEND"] = relay_cfg.fallback_provider
+        fb_info = config_manager.PROVIDERS.get(relay_cfg.fallback_provider, {})
+        fb_key = fb_info.get("env_key", "")
+        if fb_key and relay_cfg.fallback_api_key:
+            os.environ[fb_key] = relay_cfg.fallback_api_key
+
     # Import here (not at module top) so ``cmd_stop`` / ``cmd_status`` never
     # pay the cost of importing the full server stack.
     from llm_relay.config import Config
@@ -70,9 +78,17 @@ def _run(relay_cfg: RelayConfig) -> None:
     print()
     _ok(f"Proxy running  →  {relay_cfg.base_url()}")
     _ok(f"Backend        →  {relay_cfg.provider_display()}")
+    if relay_cfg.fallback_provider:
+        fb_name = config_manager.PROVIDERS.get(
+            relay_cfg.fallback_provider, {}
+        ).get("display", relay_cfg.fallback_provider)
+        _ok(f"Fallback       →  {fb_name}")
     print()
-    print("  Set in Codex (already done by setup):")
-    print(f"    OPENAI_BASE_URL={relay_cfg.base_url()}")
+    print("  Endpoints:")
+    print(f"    {relay_cfg.base_url()}/responses      (Codex CLI)")
+    print(f"    {relay_cfg.base_url()}/v1/responses   (Codex CLI)")
+    print(f"    {relay_cfg.base_url()}/v1/messages    (Claude Code / Desktop)")
+    print(f"    {relay_cfg.base_url()}/v1/models      (Auto-discovery)")
     print()
     print("  Press Ctrl+C to stop.\n")
 

@@ -100,7 +100,12 @@ def make_handler(
                     "created_at": "2026-01-01T00:00:00Z",
                 },
             ]
-            self._send_json_direct({"object": "list", "data": models})
+            self._send_json_direct({
+                "data": models,
+                "has_more": False,
+                "first_id": models[0]["id"],
+                "last_id": models[-1]["id"],
+            })
 
         # ── POST /responses ───────────────────────────────────────────────────
 
@@ -361,7 +366,7 @@ def make_handler(
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "keep-alive")
+            self.send_header("Connection", "close")
             self.send_header("x-request-id", req_id)
             self.end_headers()
 
@@ -476,7 +481,7 @@ def make_handler(
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "keep-alive")
+            self.send_header("Connection", "close")
             self.end_headers()
 
             msg_id  = response.get("id", f"msg_{uuid.uuid4().hex[:12]}")
@@ -565,8 +570,7 @@ def make_handler(
             # message_stop
             self._emit("message_stop", {"type": "message_stop"})
 
-            # Signal end of chunked transfer encoding so Claude Desktop
-            # stops the spinner immediately.
+            # Signal end of chunked body and close so the client stops waiting.
             self.wfile.write(b"0\r\n\r\n")
             self.wfile.flush()
 

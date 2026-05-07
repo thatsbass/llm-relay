@@ -88,6 +88,8 @@ def _generate_ca() -> None:
         "-key", str(_CA_KEY),
         "-sha256", "-days", "3650",
         "-subj", _CA_NAME,
+        "-addext", "basicConstraints=critical,CA:TRUE",
+        "-addext", "keyUsage=critical,keyCertSign,cRLSign",
         "-out", str(_CA_CERT),
     )
 
@@ -162,7 +164,7 @@ def _install_ca_macos() -> None:
     print("  Adding CA to System keychain (a macOS dialog will appear)...")
     script = (
         f'do shell script "security add-trusted-cert -d -r trustRoot'
-        f' -p ssl -k /Library/Keychains/System.keychain {ca_path}'  # noqa
+        f' -k /Library/Keychains/System.keychain {ca_path}'  # noqa
         f' && echo OK"'
         f' with administrator privileges'
     )
@@ -179,7 +181,7 @@ def _install_ca_macos() -> None:
     result = subprocess.run(
         [
             "security", "add-trusted-cert",
-            "-d", "-r", "trustRoot", "-p", "ssl",
+            "-d", "-r", "trustRoot",
             "-k", str(Path.home() / "Library" / "Keychains" / "login.keychain-db"),
             ca_path,
         ],
@@ -260,12 +262,10 @@ def _warn_manual_install() -> None:
 def _print_macos_manual_install(ca_path: str) -> None:
     print(
         f"\n  \033[31m✗\033[0m  CA cert could not be auto-installed.\n"
-        f"\n  Run this command once (it will ask for your macOS password):\n"
-        f"\n    \033[1msudo security add-trusted-cert"
-        f" -d -r trustRoot -p ssl"
+        f"\n  Run this in your terminal:\n"
+        f"\n    \033[1msudo security add-trusted-cert -d -r trustRoot"
         f" -k /Library/Keychains/System.keychain"
-        f" \\\n        {ca_path}\033[0m\n"
-        f"\n  Then restart Claude Desktop.\n",
+        f" \\\n        {ca_path}\033[0m\n",
         file=sys.stderr,
     )
 

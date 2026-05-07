@@ -14,10 +14,10 @@ _PID_FILE = RELAY_DIR / "proxy.pid"
 # ── Public API ────────────────────────────────────────────────────────────────
 
 
-def write() -> None:
-    """Write the current process PID to the PID file."""
+def write(pid: int | None = None) -> None:
+    """Write *pid* (or current process PID) to the PID file."""
     RELAY_DIR.mkdir(parents=True, exist_ok=True)
-    _PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
+    _PID_FILE.write_text(str(pid if pid is not None else os.getpid()), encoding="utf-8")
 
 
 def clear() -> None:

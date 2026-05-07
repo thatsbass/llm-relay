@@ -52,106 +52,153 @@ llm-relay update
 llm-relay setup
 ```
 
-Le wizard te demandera :
+Le wizard demande :
+- Port
+- Provider (deepseek, deepseek-anthropic, opencode)
+- API key
+- Fallback (optionnel)
 
-```
-  Port [8080]:
-  Provider (deepseek/deepseek-anthropic/opencode) [deepseek]:
-  DEEPSEEK_API_KEY [current ends in …xxxx]:
-  Fallback provider (deepseek/deepseek-anthropic/opencode/none) [none]:
-```
+**Tout est automatique** : le setup écrit la config Codex CLI, le fichier d'environnement Claude Code, et la config Claude Desktop 3P.
 
-**Exemples de configuration :**
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│ Configuration A : DeepSeek seul (simple, pas cher)                      │
-│                                                                         │
-│   Provider:  deepseek                                                   │
-│   API key:   sk-votre-cle-deepseek                                      │
-│   Fallback:  none                                                       │
-│                                                                         │
-│   → Claude Code parle au proxy, le proxy forward à DeepSeek Chat        │
-│   → Codex CLI parle au proxy, le proxy traduit vers DeepSeek Chat       │
-└─────────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────────┐
-│ Configuration B : DeepSeek + OpenCode Go (avec fallback)                │
-│                                                                         │
-│   Provider:  deepseek                                                   │
-│   API key:   sk-votre-cle-deepseek                                      │
-│   Fallback:  opencode                                                   │
-│   API key:   oc-votre-cle-opencode                                      │
-│                                                                         │
-│   → Si DeepSeek est down, bascule automatiquement sur OpenCode Go       │
-└─────────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────────┐
-│ Configuration C : DeepSeek Anthropic API (pass-through natif)           │
-│                                                                         │
-│   Provider:  deepseek-anthropic                                         │
-│   API key:   sk-votre-cle-deepseek                                      │
-│   Fallback:  none                                                       │
-│                                                                         │
-│   → Claude Code/Desktop → proxy → DeepSeek /anthropic (0 traduction)   │
-│   → Codex CLI → proxy → traduit vers Chat Completions                  │
-│   → Préserve le format Anthropic pour une meilleure compatibilité       │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### 3. Démarrer le proxy
+### 3. Démarrer en tâche de fond (daemon)
 
 ```bash
-llm-relay start
+llm-relay start --daemon
+llm-relay start --daemon --tls --port 8443   # avec HTTPS
 ```
 
 ```
-  ✓ Proxy running  →  http://127.0.0.1:8080
-  ✓ Backend        →  DeepSeek
-  ✓ Fallback       →  OpenCode Go
-
-  Endpoints:
-    http://127.0.0.1:8080/responses      (Codex CLI)
-    http://127.0.0.1:8080/v1/responses   (Codex CLI)
-    http://127.0.0.1:8080/v1/messages    (Claude Code / Desktop)
-    http://127.0.0.1:8080/v1/models      (Auto-discovery)
-
-  Press Ctrl+C to stop.
+  ✓ Proxy started (daemon) → PID 12345
+  ✓ Listening on https://127.0.0.1:8443
+  ✓ Backend: DeepSeek
+  ✓ Logs: llm-relay logs -f
 ```
 
-### 4. Démarrer avec HTTPS (pour Claude Desktop 3P)
+Le proxy tourne en arrière-plan. Pour l'arrêter : `llm-relay stop`.
+
+### 4. Logs
 
 ```bash
-LLM_RELAY_TLS=1 llm-relay start
+llm-relay logs               # 20 dernières lignes
+llm-relay logs -n 100         # 100 lignes
+llm-relay logs -f             # suivre en direct (Ctrl+C pour quitter)
 ```
 
-Le proxy génère automatiquement un certificat auto-signé dans `~/.llm-relay/tls/` et écoute en HTTPS sur `https://127.0.0.1:8080`.
+Fichier : `~/.llm-relay/proxy.log`
+
+### 5. État
+
+```bash
+llm-relay status
+```
+
+```
+  ✓ Status    : running  (PID 12345)
+  ✓ Provider  : DeepSeek
+  ✓ Port      : 8443
+  ✓ URL       : https://127.0.0.1:8443
+  ✓ API key   : …abcd
+```
 
 ---
 
-## Utilisation avec Claude Code
-
-### Via le proxy (tous les backends)
+## Switching de backend
 
 ```bash
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
-export ANTHROPIC_AUTH_TOKEN=any-value
+# Voir les backends disponibles
+llm-relay backend list
+
+# Changer de backend (met à jour toutes les configs automatiquement)
+llm-relay config backend deepseek-anthropic
+llm-relay config backend opencode
+
+# Si le proxy tourne, le redémarrer pour appliquer
+llm-relay stop && llm-relay start --daemon
+```
+
+---
+
+## Utilisation avec Claude Code CLI
+
+### Via le proxy (mode par défaut)
+
+```bash
+llm-relay claude proxy
+source ~/.llm-relay/claude-code.env
 claude
 ```
 
 Le proxy route vers le backend configuré (DeepSeek, OpenCode Go, etc.).
 
-### Directement vers Anthropic (ton abonnement)
+### Directement vers ton abonnement Anthropic
 
 ```bash
-export ANTHROPIC_BASE_URL=https://api.anthropic.com
-export ANTHROPIC_AUTH_TOKEN=ta-cle-api-anthropic
+llm-relay claude direct
+# → demande ta clé API Anthropic
+source ~/.llm-relay/claude-code.env
 claude
 ```
+
+### Fichier d'environnement généré
+
+`~/.llm-relay/claude-code.env` contient toutes les variables nécessaires :
+
+```bash
+export ANTHROPIC_BASE_URL="https://127.0.0.1:8443"
+export ANTHROPIC_AUTH_TOKEN="llm-relay"
+export ANTHROPIC_MODEL="deepseek-v4-pro"
+export ANTHROPIC_DEFAULT_OPUS_MODEL="deepseek-v4-pro"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="deepseek-v4-pro"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="deepseek-v4-flash"
+export CLAUDE_CODE_SUBAGENT_MODEL="deepseek-v4-flash"
+export CLAUDE_CODE_EFFORT_LEVEL="max"
+```
+
+Le fichier est sourcé automatiquement dans ton shell profile (`.zshrc`/`.bashrc`) lors du `llm-relay setup`.
 
 ---
 
 ## Utilisation avec Claude Desktop en mode 3P
+
+Le `llm-relay setup` écrit automatiquement la config dans :
+
+```
+~/Library/Application Support/Claude-3p/configLibrary/<id>.json
+```
+
+Si tu as besoin de la regénérer :
+
+```bash
+llm-relay config backend deepseek-anthropic    # regénère le fichier 3P
+```
+
+Puis quitter et relancer Claude Desktop. L'écran de connexion affiche :
+- **"Continuer avec Passerelle"** → Claude Desktop + llm-relay (DeepSeek)
+- **"Se connecter à Anthropic"** → Claude Desktop standard
+
+### Si le sélecteur de modèles n'affiche pas DeepSeek
+
+Quitter complètement Claude Desktop (⌘Q) et relancer. La config `inferenceModels` force l'affichage des modèles DeepSeek.
+
+---
+
+## Résumé des commandes
+
+| Commande | Action |
+|----------|--------|
+| `llm-relay start --daemon` | Démarrer en arrière-plan |
+| `llm-relay stop` | Arrêter |
+| `llm-relay status` | État du proxy |
+| `llm-relay logs [-f]` | Voir les logs |
+| `llm-relay setup` | Reconfigurer |
+| `llm-relay config port N` | Changer le port |
+| `llm-relay config key sk-xxx` | Changer la clé API |
+| `llm-relay config backend <name>` | Changer de provider |
+| `llm-relay backend list` | Lister les providers |
+| `llm-relay claude proxy` | Claude Code → proxy |
+| `llm-relay claude direct` | Claude Code → Anthropic |
+| `llm-relay trust-ca` | Installer le certificat HTTPS |
+| `llm-relay update` | Mettre à jour |
 
 ### Étape 1 : Configurer le proxy
 

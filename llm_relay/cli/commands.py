@@ -1,4 +1,4 @@
-"""CLI subcommand implementations (start, stop, status, setup, update, config)."""
+"""CLI subcommand implementations (start, stop, status, setup, update, config, backend, claude, logs)."""
 
 from __future__ import annotations
 
@@ -6,31 +6,73 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from llm_relay.cli import config_manager
 from llm_relay.cli import pid as _pid
-from llm_relay.cli.config_manager import RelayConfig
+from llm_relay.cli.config_manager import PROVIDERS, RelayConfig
 from llm_relay.cli.codex_writer import update as _update_codex
 from llm_relay.cli.wizard import run as _run_wizard
 
-_REPO = "https://github.com/thatsbass/llm-relay.git"
+_REPO   = "https://github.com/thatsbass/llm-relay.git"
+_LOG_FILE = Path.home() / ".llm-relay" / "proxy.log"
+_CLAUDE_ENV = Path.home() / ".llm-relay" / "claude-code.env"
 
 
 # ── start ─────────────────────────────────────────────────────────────────────
 
 
-def cmd_start(tls: bool = False, port: int | None = None) -> None:
+def cmd_start(tls: bool = False, port: int | None = None, daemon: bool = False) -> None:
     """Start the proxy, running setup first if not yet configured."""
     relay_cfg = config_manager.load()
     if not relay_cfg or not relay_cfg.api_key.strip():
         print("No configuration found — running setup first.\n")
         relay_cfg = _run_wizard()
 
-    _run(relay_cfg, tls=tls, port=port)
+    if daemon:
+        _start_daemon(relay_cfg, tls=tls, port=port)
+    else:
+        _run(relay_cfg, tls=tls, port=port)
 
 
-def _run(relay_cfg: RelayConfig, tls: bool = False, port: int | None = None) -> None:
+def _start_daemon(relay_cfg: RelayConfig, tls: bool = False, port: int | None = None) -> None:
+    """Fork, redirect stdout/stderr to log file, return immediately."""
+    if _pid.is_running():
+        _die("Proxy is already running. Use llm-relay stop first.")
+
+    _LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    # Set env vars BEFORE forking so the child inherits them.
+    os.environ[relay_cfg.env_key_name()] = relay_cfg.api_key
+    if port is not None:
+        os.environ["LLM_RELAY_PORT"] = str(port)
+    if tls:
+        os.environ["LLM_RELAY_TLS"] = "1"
+
+    child_pid = os.fork()
+    if child_pid > 0:
+        _pid.write(child_pid)
+        time.sleep(1)
+        if _pid.is_running():
+            scheme = "https" if tls else "http"
+            eff_port = port if port is not None else relay_cfg.port
+            _ok(f"Proxy started (daemon) → PID {child_pid}")
+            _ok(f"Listening on {scheme}://127.0.0.1:{eff_port}")
+            _ok(f"Backend: {relay_cfg.provider_display()}")
+            _ok(f"Logs: llm-relay logs -f")
+        else:
+            _die("Proxy failed to start. Check logs: llm-relay logs")
+        return
+
+    # Child
+    sys.stdout = open(str(_LOG_FILE), "a")
+    sys.stderr = sys.stdout
+    os.setsid()
+    _run(relay_cfg, tls=tls, port=port, is_daemon=True)
+
+
+def _run(relay_cfg: RelayConfig, tls: bool = False, port: int | None = None, is_daemon: bool = False) -> None:
     """Wire relay config into the proxy stack and start serving."""
     # Inject the API key into the environment so Config.from_env() picks it up.
     os.environ[relay_cfg.env_key_name()] = relay_cfg.api_key
@@ -82,23 +124,25 @@ def _run(relay_cfg: RelayConfig, tls: bool = False, port: int | None = None) -> 
 
     # ── Startup banner ────────────────────────────────────────────────────────
 
-    print()
-    scheme = "https" if tls else "http"
-    _ok(f"Proxy running  →  {scheme}://127.0.0.1:{relay_cfg.port}")
-    _ok(f"Backend        →  {relay_cfg.provider_display()}")
-    if relay_cfg.fallback_provider:
-        fb_name = config_manager.PROVIDERS.get(
-            relay_cfg.fallback_provider, {}
-        ).get("display", relay_cfg.fallback_provider)
-        _ok(f"Fallback       →  {fb_name}")
-    print()
-    print("  Endpoints:")
-    print(f"    {relay_cfg.base_url()}/responses      (Codex CLI)")
-    print(f"    {relay_cfg.base_url()}/v1/responses   (Codex CLI)")
-    print(f"    {relay_cfg.base_url()}/v1/messages    (Claude Code / Desktop)")
-    print(f"    {relay_cfg.base_url()}/v1/models      (Auto-discovery)")
-    print()
-    print("  Press Ctrl+C to stop.\n")
+    if not is_daemon:
+        print()
+        scheme = "https" if tls else "http"
+        eff_port = port if port is not None else relay_cfg.port
+        _ok(f"Proxy running  →  {scheme}://127.0.0.1:{eff_port}")
+        _ok(f"Backend        →  {relay_cfg.provider_display()}")
+        if relay_cfg.fallback_provider:
+            fb_name = PROVIDERS.get(
+                relay_cfg.fallback_provider, {}
+            ).get("display", relay_cfg.fallback_provider)
+            _ok(f"Fallback       →  {fb_name}")
+        print()
+        print("  Endpoints:")
+        print(f"    {relay_cfg.base_url()}/responses      (Codex CLI)")
+        print(f"    {relay_cfg.base_url()}/v1/responses   (Codex CLI)")
+        print(f"    {relay_cfg.base_url()}/v1/messages    (Claude Code / Desktop)")
+        print(f"    {relay_cfg.base_url()}/v1/models      (Auto-discovery)")
+        print()
+        print("  Press Ctrl+C to stop.\n")
 
     # ── Serve ─────────────────────────────────────────────────────────────────
 
@@ -269,3 +313,123 @@ def cmd_trust_ca() -> None:
     print()
     install_ca_trust()
     print()
+
+
+# ── backend ────────────────────────────────────────────────────────────────────
+
+
+def cmd_backend(name: str | None = None) -> None:
+    """Switch the active backend provider or list available ones."""
+    if name is None or name == "list":
+        print()
+        cfg = config_manager.load()
+        current = cfg.provider if cfg else "—"
+        for key, info in PROVIDERS.items():
+            marker = "  * " if key == current else "    "
+            print(f"    {marker}{key:<22} {info['display']}")
+        print()
+        print("  Switch:  llm-relay config backend <name>")
+        print()
+        return
+
+    if name not in PROVIDERS:
+        choices = ", ".join(PROVIDERS)
+        _die(f"Unknown backend {name!r}. Available: {choices}")
+
+    cfg = config_manager.load()
+    if cfg is None:
+        _die("Not configured yet. Run: llm-relay setup")
+
+    cfg.provider = name
+    config_manager.save(cfg)
+    _update_codex(cfg)
+    _ok(f"Backend switched to {PROVIDERS[name]['display']}")
+
+    # Update Claude Code env.
+    _write_claude_env(name)
+
+    # Update Claude Desktop 3P config.
+    from llm_relay.cli import claude_writer
+    tls = os.environ.get("LLM_RELAY_TLS", "").lower() in ("1", "true", "yes")
+    claude_writer.write_all(cfg.base_url(), cfg.port, tls=tls)
+
+    if _pid.is_running():
+        print()
+        print("  Proxy is running — restart to apply:")
+        print("    llm-relay stop && llm-relay start --daemon")
+
+
+# ── claude ─────────────────────────────────────────────────────────────────────
+
+
+def cmd_claude(mode: str) -> None:
+    """Configure Claude Code CLI to use the proxy or Anthropic directly."""
+    if mode not in ("proxy", "direct"):
+        _die("Usage: llm-relay claude <proxy|direct>")
+
+    _CLAUDE_ENV.parent.mkdir(parents=True, exist_ok=True)
+
+    if mode == "proxy":
+        _write_claude_env(config_manager.load().provider if config_manager.load() else "deepseek")
+        _ok("Claude Code configured to use llm-relay proxy")
+    else:
+        api_key = os.environ.get("ANTHROPIC_AUTH_TOKEN", "").strip()
+        if not api_key:
+            api_key = input("  Anthropic API key: ").strip()
+            if not api_key:
+                _die("API key required for direct Anthropic access")
+
+        _CLAUDE_ENV.write_text(f"""# llm-relay — Claude Code (Anthropic direct)
+export ANTHROPIC_BASE_URL="https://api.anthropic.com"
+export ANTHROPIC_AUTH_TOKEN="{api_key}"
+""", encoding="utf-8")
+        _ok("Claude Code configured to use Anthropic directly")
+
+    print(f"  Source to apply:  source ~/.llm-relay/claude-code.env")
+    print()
+
+
+# ── logs ───────────────────────────────────────────────────────────────────────
+
+
+def cmd_logs(lines: int = 20, follow: bool = False) -> None:
+    """Display or follow the proxy log file."""
+    if not _LOG_FILE.exists():
+        print("  No log file yet. Start the proxy first.")
+        return
+
+    if follow:
+        print(f"  Following {_LOG_FILE} (Ctrl+C to stop)...")
+        subprocess.run(["tail", "-f", str(_LOG_FILE)])
+    else:
+        content = _LOG_FILE.read_text(encoding="utf-8")
+        content_lines = content.strip().split("\n")
+        for line in content_lines[-lines:]:
+            print(f"  {line}")
+
+
+# ── Internal helpers ──────────────────────────────────────────────────────────
+
+
+def _write_claude_env(provider: str) -> None:
+    """Write ~/.llm-relay/claude-code.env for the given provider."""
+    model_map = {
+        "deepseek": ("deepseek-chat", "deepseek-chat"),
+        "deepseek-anthropic": ("deepseek-v4-pro", "deepseek-v4-flash"),
+        "opencode": ("deepseek-v4-pro", "deepseek-v4-flash"),
+    }
+    primary, flash = model_map.get(provider, ("deepseek-v4-pro", "deepseek-v4-flash"))
+
+    _CLAUDE_ENV.parent.mkdir(parents=True, exist_ok=True)
+    _CLAUDE_ENV.write_text(f"""# llm-relay — Claude Code environment
+# Source in your shell:  source ~/.llm-relay/claude-code.env
+
+export ANTHROPIC_BASE_URL="http://127.0.0.1:8080"
+export ANTHROPIC_AUTH_TOKEN="llm-relay"
+export ANTHROPIC_MODEL="{primary}"
+export ANTHROPIC_DEFAULT_OPUS_MODEL="{primary}"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="{primary}"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="{flash}"
+export CLAUDE_CODE_SUBAGENT_MODEL="{flash}"
+export CLAUDE_CODE_EFFORT_LEVEL="max"
+""", encoding="utf-8")

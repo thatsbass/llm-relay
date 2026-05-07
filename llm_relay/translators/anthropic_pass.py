@@ -46,6 +46,19 @@ class AnthropicPassThroughTranslator(AbstractTranslator):
 
     # ── Pass-through forward ──────────────────────────────────────────────
 
+    def build_request(self, messages, tools, max_output_tokens, tc_count,
+                      temperature=None, top_p=None):
+        """Fallback build_request (not used in pass-through path)."""
+        raise NotImplementedError(
+            "Use build_anthropic_request for pass-through translators"
+        )
+
+    def parse_response(self, raw_body, req_id):
+        """Fallback parse_response (not used in pass-through path)."""
+        raise NotImplementedError(
+            "Use parse_anthropic_response for pass-through translators"
+        )
+
     def build_anthropic_request(self, original_body: dict) -> bytes:
         """Return the original body as JSON bytes — no transformation needed."""
         return json.dumps(original_body).encode()

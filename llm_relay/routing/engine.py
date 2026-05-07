@@ -51,7 +51,10 @@ class RoutingEngine:
 
     def has_pass_through(self) -> bool:
         """Return True if the primary translator supports Anthropic pass-through."""
-        return hasattr(self._primary, "build_anthropic_request")
+        return (
+            "build_anthropic_request" in type(self._primary).__dict__
+            or callable(getattr(self._primary, "build_anthropic_request", None))
+        )
 
     def __getattr__(self, name: str):
         """Delegate unknown attributes to the primary translator."""

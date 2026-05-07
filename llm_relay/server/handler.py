@@ -199,7 +199,7 @@ def make_handler(
                 )
 
             # ── Pass-through path: backend speaks Anthropic natively ──────
-            if hasattr(self._routing, "build_anthropic_request"):
+            if self._routing.has_pass_through():
                 try:
                     payload = self._routing.build_anthropic_request(req_data)
                     raw_resp = self._routing.forward(payload)

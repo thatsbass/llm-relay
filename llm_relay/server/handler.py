@@ -58,8 +58,19 @@ def make_handler(
                 self._send_json_direct({"status": "ok"})
             elif path == "/v1/models":
                 self._handle_models()
+            elif path == "/":
+                self._send_json_direct({"status": "ok", "version": "0.2.0"})
             else:
                 self.send_error(404, f"Not found: {self.path}")
+
+        def do_HEAD(self) -> None:
+            """Respond to HEAD requests the same as GET."""
+            path = self.path.split("?")[0]
+            if path in ("/health", "/v1/models", "/"):
+                self.send_response(200)
+                self.end_headers()
+            else:
+                self.send_error(404)
 
         def _handle_models(self) -> None:
             """Return available models in Anthropic format for auto-discovery."""
@@ -94,6 +105,8 @@ def make_handler(
                 self._handle_responses()
             elif path == "/v1/messages":
                 self._handle_anthropic()
+            elif path == "/v1/messages/count_tokens":
+                self._handle_count_tokens()
             else:
                 self.send_error(404, f"Unknown path: {self.path}")
 
@@ -172,14 +185,79 @@ def make_handler(
 
             # ── 7. Respond to client ──────────────────────────────────────────
             if stream:
-                if self._config.debug:
-                    print(f"  → sending simulated SSE stream", file=sys.stderr)
-                self._stream_anthropic_response(result.response)
+                self._stream_response(result.response, req_id)
             else:
-                self._send_json_direct(result.response)
-            return
+                self._send_json_direct(result.response, extra_headers={"x-request-id": req_id})
 
-            # ── Translation path: Anthropic → Chat Completions ────────────
+        # ── POST /v1/messages ─────────────────────────────────────────────
+
+        def _handle_anthropic(self) -> None:
+            """Proxy an Anthropic Messages API request to the backend."""
+            length   = int(self.headers.get("Content-Length", 0))
+            raw_body = self.rfile.read(length)
+
+            try:
+                req_data = json.loads(raw_body)
+            except json.JSONDecodeError:
+                self.send_error(400, "Request body is not valid JSON")
+                return
+
+            parsed = parse_anthropic_request(req_data)
+            stream = parsed.stream
+
+            if self._config.debug:
+                print(
+                    f"\n{'=' * 60} [anthropic] {parsed.model}\n"
+                    f"  messages={len(parsed.messages)}  tools={len(parsed.tools or [])}"
+                    f"  stream={stream}  max_tokens={parsed.max_tokens}\n"
+                    f"  backend={self._config.backend}"
+                    f"  pass_through={self._routing.has_pass_through()}",
+                    file=sys.stderr,
+                )
+
+            # ── Pass-through path ──────────────────────────────────────
+            if self._routing.has_pass_through():
+                try:
+                    payload = self._routing.build_anthropic_request(req_data)
+                    if self._config.debug:
+                        print(
+                            f"  [pass-through] forwarding to"
+                            f" {self._routing.primary._full_url()}",
+                            file=sys.stderr,
+                        )
+                    raw_resp = self._routing.forward(payload)
+                    if self._config.debug:
+                        print(
+                            f"  [pass-through] response len={len(raw_resp)}",
+                            file=sys.stderr,
+                        )
+                    result = self._routing.parse_anthropic_response(
+                        raw_resp, f"msg_{uuid.uuid4().hex[:24]}",
+                    )
+                except HTTPError as exc:
+                    err_body = exc.read().decode("utf-8", errors="replace")
+                    print(f"[llm-relay] Upstream HTTP {exc.code}: {err_body[:500]}", file=sys.stderr)
+                    self.send_error(502, f"Upstream error: {exc.code}")
+                    return
+                except URLError as exc:
+                    print(f"[llm-relay] Connection error: {exc.reason}", file=sys.stderr)
+                    self.send_error(502, f"Connection error: {exc.reason}")
+                    return
+                except Exception as exc:
+                    import traceback
+                    traceback.print_exc(file=sys.stderr)
+                    self.send_error(500, str(exc))
+                    return
+
+                if stream:
+                    if self._config.debug:
+                        print("  → sending simulated SSE stream", file=sys.stderr)
+                    self._stream_anthropic_response(result.response)
+                else:
+                    self._send_json_direct(result.response)
+                return
+
+            # ── Translation path: Anthropic → Chat Completions ──────────
             try:
                 payload = self._routing.build_request(
                     parsed.messages, parsed.tools, parsed.max_tokens,
@@ -188,22 +266,12 @@ def make_handler(
                     top_p=parsed.top_p,
                 )
                 if self._config.debug:
-                    print(
-                        f"  [translate] forwarding to"
-                        f" {self._routing.primary._full_url()}",
-                        file=sys.stderr,
-                    )
+                    print(f"  [translate] forwarding to {self._routing.primary._full_url()}", file=sys.stderr)
                 raw_resp = self._routing.forward(json.dumps(payload).encode())
-                result   = self._routing.parse_response(
-                    raw_resp,
-                    f"msg_{uuid.uuid4().hex[:24]}",
-                )
+                result   = self._routing.parse_response(raw_resp, f"msg_{uuid.uuid4().hex[:24]}")
             except HTTPError as exc:
                 err_body = exc.read().decode("utf-8", errors="replace")
-                print(
-                    f"[llm-relay] Upstream HTTP {exc.code}: {err_body[:500]}",
-                    file=sys.stderr,
-                )
+                print(f"[llm-relay] Upstream HTTP {exc.code}: {err_body[:500]}", file=sys.stderr)
                 self.send_error(502, f"Upstream error: {exc.code}")
                 return
             except URLError as exc:
@@ -218,10 +286,16 @@ def make_handler(
 
             if stream:
                 if self._config.debug:
-                    print(f"  → sending simulated SSE stream", file=sys.stderr)
+                    print("  → sending simulated SSE stream", file=sys.stderr)
                 self._stream_anthropic_response(result.response)
             else:
                 self._send_json_direct(result.response)
+
+        # ── POST /v1/messages/count_tokens (Claude Desktop token counting) ─
+
+        def _handle_count_tokens(self) -> None:
+            """Handle Claude Desktop's token-counting probe."""
+            self._send_json_direct({"input_tokens": 0})
 
         # ── Session management ────────────────────────────────────────────────
 

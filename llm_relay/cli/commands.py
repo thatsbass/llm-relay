@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import select
 import signal
 import subprocess
 import sys
@@ -37,24 +38,36 @@ def cmd_start(tls: bool = False, port: int | None = None, daemon: bool = False) 
 
 
 def _start_daemon(relay_cfg: RelayConfig, tls: bool = False, port: int | None = None) -> None:
-    """Fork, redirect stdout/stderr to log file, return immediately."""
+    """Fork, redirect stdout/stderr to log file, return immediately.
+
+    Uses a pipe so the parent can detect whether the child successfully
+    bound the port or crashed — avoids reporting success for a dead daemon.
+    """
     if _pid.is_running():
         _die("Proxy is already running. Use llm-relay stop first.")
 
     _LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-    # Set env vars BEFORE forking so the child inherits them.
     os.environ[relay_cfg.env_key_name()] = relay_cfg.api_key
     if port is not None:
         os.environ["LLM_RELAY_PORT"] = str(port)
     if tls:
         os.environ["LLM_RELAY_TLS"] = "1"
 
+    r_fd, w_fd = os.pipe()
     child_pid = os.fork()
+
     if child_pid > 0:
-        _pid.write(child_pid)
-        time.sleep(1)
-        if _pid.is_running():
+        # ── Parent ──────────────────────────────────────────────────────
+        os.close(w_fd)
+
+        # Wait up to 5 s for the child to report success or failure.
+        ready, _, _ = select.select([r_fd], [], [], 5)
+        msg = os.read(r_fd, 1024) if ready else b""
+        os.close(r_fd)
+
+        if msg == b"ok":
+            _pid.write(child_pid)
             scheme = "https" if tls else "http"
             eff_port = port if port is not None else relay_cfg.port
             _ok(f"Proxy started (daemon) → PID {child_pid}")
@@ -62,17 +75,54 @@ def _start_daemon(relay_cfg: RelayConfig, tls: bool = False, port: int | None = 
             _ok(f"Backend: {relay_cfg.provider_display()}")
             _ok(f"Logs: llm-relay logs -f")
         else:
-            _die("Proxy failed to start. Check logs: llm-relay logs")
+            # Collect the child's exit to avoid zombies.
+            try:
+                os.waitpid(child_pid, 0)
+            except ChildProcessError:
+                pass
+            _pid.clear()
+            error_tail = msg.decode(errors="replace")[:200] if msg else ""
+            _die(
+                f"Proxy failed to start.\n"
+                f"  Logs: llm-relay logs\n"
+                f"{'  ' + error_tail if error_tail else ''}"
+            )
         return
 
-    # Child
+    # ── Child ──────────────────────────────────────────────────────────
+    os.close(r_fd)
+    os.setsid()
+
+    # Try to create the server BEFORE redirecting output, so we can
+    # report binding errors to the parent.
+    from llm_relay.config import Config
+    from llm_relay.server.app import create_server
+
+    effective_port = port if port is not None else relay_cfg.port
+    try:
+        config = Config.from_env(port=effective_port)
+    except RuntimeError as exc:
+        os.write(w_fd, str(exc).encode())
+        os.close(w_fd)
+        os._exit(1)
+
+    try:
+        server = create_server(config)
+    except OSError as exc:
+        os.write(w_fd, f"Cannot bind to port {effective_port}: {exc.strerror}".encode())
+        os.close(w_fd)
+        os._exit(1)
+
+    # Server is ready — tell the parent, then redirect output.
+    os.write(w_fd, b"ok")
+    os.close(w_fd)
+
     sys.stdout = open(str(_LOG_FILE), "a")
     sys.stderr = sys.stdout
-    os.setsid()
-    _run(relay_cfg, tls=tls, port=port, is_daemon=True)
+    _run(relay_cfg, tls=tls, port=port, is_daemon=True, _server=server)
 
 
-def _run(relay_cfg: RelayConfig, tls: bool = False, port: int | None = None, is_daemon: bool = False) -> None:
+def _run(relay_cfg: RelayConfig, tls: bool = False, port: int | None = None, is_daemon: bool = False, _server=None) -> None:
     """Wire relay config into the proxy stack and start serving."""
     # Inject the API key into the environment so Config.from_env() picks it up.
     os.environ[relay_cfg.env_key_name()] = relay_cfg.api_key
@@ -102,13 +152,16 @@ def _run(relay_cfg: RelayConfig, tls: bool = False, port: int | None = None, is_
     except RuntimeError as exc:
         _die(str(exc))
 
-    try:
-        server = create_server(config)
-    except OSError as exc:
-        _die(
-            f"Cannot bind to port {relay_cfg.port}: {exc.strerror}.\n"
-            f"  → Run:  llm-relay config port <other-port>"
-        )
+    if _server is not None:
+        server = _server
+    else:
+        try:
+            server = create_server(config)
+        except OSError as exc:
+            _die(
+                f"Cannot bind to port {relay_cfg.port}: {exc.strerror}.\n"
+                f"  → Run:  llm-relay config port <other-port>"
+            )
 
     # ── PID file + signal handler ─────────────────────────────────────────────
 
@@ -378,9 +431,17 @@ def cmd_claude(mode: str) -> None:
             if not api_key:
                 _die("API key required for direct Anthropic access")
 
+        _CLAUDE_ENV.parent.mkdir(parents=True, exist_ok=True)
         _CLAUDE_ENV.write_text(f"""# llm-relay — Claude Code (Anthropic direct)
 export ANTHROPIC_BASE_URL="https://api.anthropic.com"
 export ANTHROPIC_AUTH_TOKEN="{api_key}"
+# No model overrides — Claude Code picks its own models.
+unset ANTHROPIC_MODEL
+unset ANTHROPIC_DEFAULT_OPUS_MODEL
+unset ANTHROPIC_DEFAULT_SONNET_MODEL
+unset ANTHROPIC_DEFAULT_HAIKU_MODEL
+unset CLAUDE_CODE_SUBAGENT_MODEL
+unset CLAUDE_CODE_EFFORT_LEVEL
 """, encoding="utf-8")
         _ok("Claude Code configured to use Anthropic directly")
 

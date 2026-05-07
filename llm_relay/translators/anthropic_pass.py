@@ -24,6 +24,9 @@ class AnthropicPassThroughTranslator(AbstractTranslator):
     DEFAULT_CHAT_ENDPOINT: str = "/v1/messages"
     DEFAULT_MODEL:         str = ""
 
+    # Map Claude model names (sent by Claude Desktop) to backend model IDs.
+    MODEL_MAP: dict[str, str] = {}
+
     # Flag telling the handler it can relay SSE events directly.
     supports_anthropic_stream_relay: bool = True
 
@@ -60,14 +63,17 @@ class AnthropicPassThroughTranslator(AbstractTranslator):
         )
 
     def build_anthropic_request(self, original_body: dict) -> bytes:
-        """Forward the original body, forcing non-streaming mode.
+        """Forward the original body, remapping model + forcing non-streaming.
 
-        We receive the full response as JSON, then the handler simulates
-        SSE events for the client.  This avoids having to parse raw SSE
-        from the backend.
+        Claude Desktop sends Anthropic model names (e.g. ``claude-sonnet-4-6``).
+        We remap them to backend-specific model IDs via ``MODEL_MAP``.
         """
         body = dict(original_body)
         body["stream"] = False
+
+        model = body.get("model", "")
+        body["model"] = self.MODEL_MAP.get(model, model)
+
         return json.dumps(body).encode()
 
     def parse_anthropic_response(
@@ -186,3 +192,14 @@ class DeepSeekAnthropicTranslator(AnthropicPassThroughTranslator):
 
     DEFAULT_BASE_URL = "https://api.deepseek.com/anthropic"
     DEFAULT_MODEL    = "deepseek-v4-pro"
+
+    MODEL_MAP = {
+        "claude-sonnet-4-6":  "deepseek-v4-pro",
+        "claude-sonnet-4-5":  "deepseek-v4-pro",
+        "claude-opus-4-7":    "deepseek-v4-pro",
+        "claude-opus-4-6":    "deepseek-v4-pro",
+        "claude-haiku-4-5":   "deepseek-v4-flash",
+        "claude-sonnet-4":    "deepseek-v4-pro",
+        "claude-opus-4":      "deepseek-v4-pro",
+        "claude-haiku-3-5":   "deepseek-v4-flash",
+    }

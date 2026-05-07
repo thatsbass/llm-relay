@@ -48,8 +48,8 @@ def _write_3p_config(gateway_url: str) -> None:
         "inferenceGatewayAuthScheme": "bearer",
         "disableDeploymentModeChooser": False,
         "inferenceModels": [
-            {"name": "deepseek-v4-pro", "supports1m": True},
-            {"name": "deepseek-v4-flash"},
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5",
         ],
     }, indent=2), encoding="utf-8")
 
@@ -61,8 +61,8 @@ def _write_3p_config(gateway_url: str) -> None:
 
     print(f"  \033[32m✓\033[0m Claude Desktop 3P config written → {config_path}")
     print(f"    Gateway URL : {gateway_url}")
-    print(f"    Models      : deepseek-v4-pro, deepseek-v4-flash")
-    print(f"    Auto-chooser: enabled (you can switch between 3P and Anthropic)")
+    print(f"    Models      : claude-sonnet-4-6, claude-haiku-4-5")
+    print(f"    Auto-chooser: enabled (switch 3P ↔ Anthropic at login)")
 
 
 def _write_claude_code_env(gateway_url: str) -> None:

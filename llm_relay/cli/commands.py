@@ -61,8 +61,8 @@ def _start_daemon(relay_cfg: RelayConfig, tls: bool = False, port: int | None = 
         # ── Parent ──────────────────────────────────────────────────────
         os.close(w_fd)
 
-        # Wait up to 5 s for the child to report success or failure.
-        ready, _, _ = select.select([r_fd], [], [], 5)
+        # Wait up to 15 s for the child (TLS cert generation can be slow).
+        ready, _, _ = select.select([r_fd], [], [], 15)
         msg = os.read(r_fd, 1024) if ready else b""
         os.close(r_fd)
 
@@ -91,10 +91,14 @@ def _start_daemon(relay_cfg: RelayConfig, tls: bool = False, port: int | None = 
 
     # ── Child ──────────────────────────────────────────────────────────
     os.close(r_fd)
+
+    # Generate TLS certs before redirecting output (no logging yet).
+    if tls:
+        from llm_relay.server.tls import ensure_certificate as _ensure_tls
+        _ensure_tls()
+
     os.setsid()
 
-    # Try to create the server BEFORE redirecting output, so we can
-    # report binding errors to the parent.
     from llm_relay.config import Config
     from llm_relay.server.app import create_server
 

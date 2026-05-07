@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import signal
+import time
 from typing import Optional
 
 from llm_relay.cli.config_manager import RELAY_DIR
@@ -45,19 +46,53 @@ def read() -> Optional[int]:
 
 
 def stop() -> bool:
-    """Send SIGTERM to the proxy; returns True if it was running, False otherwise."""
+    """Send SIGTERM to the proxy, escalate to SIGKILL if needed.
+
+    Returns True if a process was killed, False if nothing was running.
+    """
     pid = read()
     if pid is None:
         return False
-    try:
-        os.kill(pid, signal.SIGTERM)
-        clear()
-        return True
-    except (ProcessLookupError, PermissionError):
-        clear()
-        return False
+
+    # 1. Graceful shutdown via SIGTERM.
+    _kill(pid, signal.SIGTERM)
+    for _ in range(30):  # up to 3 seconds
+        time.sleep(0.1)
+        if not _process_alive(pid):
+            clear()
+            return True
+
+    # 2. Force kill via SIGKILL.
+    _kill(pid, signal.SIGKILL)
+    for _ in range(10):  # up to 1 second
+        time.sleep(0.1)
+        if not _process_alive(pid):
+            clear()
+            return True
+
+    clear()
+    return False
 
 
 def is_running() -> bool:
     """Return ``True`` if a live proxy process is found."""
     return read() is not None
+
+
+# ── Internal helpers ──────────────────────────────────────────────────────────
+
+
+def _kill(pid: int, sig: int) -> bool:
+    try:
+        os.kill(pid, sig)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
+def _process_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False

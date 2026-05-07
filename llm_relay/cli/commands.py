@@ -54,8 +54,9 @@ def _run(relay_cfg: RelayConfig, tls: bool = False, port: int | None = None) -> 
     from llm_relay.config import Config
     from llm_relay.server.app import create_server
 
+    effective_port = port if port is not None else relay_cfg.port
     try:
-        config = Config.from_env(port=relay_cfg.port)
+        config = Config.from_env(port=effective_port)
     except RuntimeError as exc:
         _die(str(exc))
 

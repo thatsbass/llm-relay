@@ -197,10 +197,50 @@ def make_handler(
                     file=sys.stderr,
                 )
 
+            # ── Pass-through path: backend speaks Anthropic natively ──────
+            if hasattr(self._translator, "build_anthropic_request"):
+                try:
+                    payload = self._translator.build_anthropic_request(req_data)
+                    raw_resp = self._translator.forward(payload)
+                    result = self._translator.parse_anthropic_response(
+                        raw_resp, f"msg_{uuid.uuid4().hex[:24]}",
+                    )
+                except HTTPError as exc:
+                    err_body = exc.read().decode("utf-8", errors="replace")
+                    print(
+                        f"[llm-relay] Upstream HTTP {exc.code}: {err_body[:500]}",
+                        file=sys.stderr,
+                    )
+                    self.send_error(502, f"Upstream error: {exc.code}")
+                    return
+                except URLError as exc:
+                    print(
+                        f"[llm-relay] Connection error: {exc.reason}",
+                        file=sys.stderr,
+                    )
+                    self.send_error(502, f"Connection error: {exc.reason}")
+                    return
+                except Exception as exc:
+                    import traceback
+                    traceback.print_exc(file=sys.stderr)
+                    self.send_error(500, str(exc))
+                    return
+
+                if stream and getattr(
+                    self._translator, "supports_anthropic_stream_relay", False
+                ):
+                    self._stream_anthropic_response(result.response)
+                elif stream:
+                    self._stream_anthropic_response(result.response)
+                else:
+                    self._send_json_direct(result.response)
+                return
+
+            # ── Translation path: Anthropic → Chat Completions ────────────
             try:
                 payload = self._translator.build_request(
                     parsed.messages, parsed.tools, parsed.max_tokens,
-                    0,  # tc_count — the translator will decide based on context
+                    0,
                     temperature=parsed.temperature,
                     top_p=parsed.top_p,
                 )
@@ -209,7 +249,6 @@ def make_handler(
                     raw_resp,
                     f"msg_{uuid.uuid4().hex[:24]}",
                 )
-
             except HTTPError as exc:
                 err_body = exc.read().decode("utf-8", errors="replace")
                 print(
@@ -218,12 +257,10 @@ def make_handler(
                 )
                 self.send_error(502, f"Upstream error: {exc.code}")
                 return
-
             except URLError as exc:
                 print(f"[llm-relay] Connection error: {exc.reason}", file=sys.stderr)
                 self.send_error(502, f"Connection error: {exc.reason}")
                 return
-
             except Exception as exc:
                 import traceback
                 traceback.print_exc(file=sys.stderr)

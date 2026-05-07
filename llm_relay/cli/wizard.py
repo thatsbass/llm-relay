@@ -130,10 +130,11 @@ def _save(config: RelayConfig) -> None:
     print()
     print("  \033[1mNext steps:\033[0m")
     print(f"    1. Reload your shell:  {reload_cmd}")
-    print("    2. Start the proxy:    llm-relay start")
+    print("    2. Start the proxy:    llm-relay start --tls --port 8443")
     print("    3. For Codex CLI:      codex")
     print()
-    claude_writer.print_guide(config.base_url(), config.port)
+    tls = os.environ.get("LLM_RELAY_TLS", "").lower() in ("1", "true", "yes")
+    claude_writer.write_all(config.base_url(), config.port, tls=tls)
 
 
 # ── Shell profile helpers ─────────────────────────────────────────────────────

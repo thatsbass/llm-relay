@@ -22,8 +22,11 @@ CLAUDE_CODE_ENV = Path.home() / ".llm-relay" / "claude-code.env"
 # ── Public API ────────────────────────────────────────────────────────────────
 
 
-def write_all(base_url: str, port: int, tls: bool = False) -> None:
-    """Write Claude Desktop 3P config and Claude Code env file."""
+def write_all(base_url: str, port: int, tls: bool = True) -> None:
+    """Write Claude Desktop 3P config and Claude Code env file.
+
+    Defaults to HTTPS because Claude Desktop 3P requires it.
+    """
     scheme = "https" if tls else "http"
     url = f"{scheme}://127.0.0.1:{port}"
 

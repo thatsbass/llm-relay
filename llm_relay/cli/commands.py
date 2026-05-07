@@ -350,8 +350,7 @@ def cmd_backend(name: str | None = None) -> None:
 
     # Update Claude Desktop 3P config.
     from llm_relay.cli import claude_writer
-    tls = os.environ.get("LLM_RELAY_TLS", "").lower() in ("1", "true", "yes")
-    claude_writer.write_all(cfg.base_url(), cfg.port, tls=tls)
+    claude_writer.write_all(cfg.base_url(), cfg.port)
 
     if _pid.is_running():
         print()
@@ -420,11 +419,16 @@ def _write_claude_env(provider: str) -> None:
     }
     primary, flash = model_map.get(provider, ("deepseek-v4-pro", "deepseek-v4-flash"))
 
+    cfg = config_manager.load()
+    port = cfg.port if cfg else 8080
+    tls = os.environ.get("LLM_RELAY_TLS", "").lower() in ("1", "true", "yes")
+    scheme = "https" if tls else "http"
+
     _CLAUDE_ENV.parent.mkdir(parents=True, exist_ok=True)
     _CLAUDE_ENV.write_text(f"""# llm-relay — Claude Code environment
 # Source in your shell:  source ~/.llm-relay/claude-code.env
 
-export ANTHROPIC_BASE_URL="http://127.0.0.1:8080"
+export ANTHROPIC_BASE_URL="{scheme}://127.0.0.1:{port}"
 export ANTHROPIC_AUTH_TOKEN="llm-relay"
 export ANTHROPIC_MODEL="{primary}"
 export ANTHROPIC_DEFAULT_OPUS_MODEL="{primary}"

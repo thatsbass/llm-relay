@@ -64,6 +64,8 @@ class TranslatorFactory:
 
 from llm_relay.translators.anthropic_pass import DeepSeekAnthropicTranslator  # noqa: E402
 from llm_relay.translators.deepseek import DeepSeekTranslator  # noqa: E402
+from llm_relay.translators.opencode import OpenCodeGoTranslator  # noqa: E402
 
 TranslatorFactory.register("deepseek", DeepSeekTranslator)
 TranslatorFactory.register("deepseek-anthropic", DeepSeekAnthropicTranslator)
+TranslatorFactory.register("opencode", OpenCodeGoTranslator)

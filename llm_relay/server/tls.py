@@ -123,10 +123,11 @@ def _generate_server_cert() -> None:
 
 
 def _san_ext_file() -> str:
-    """Write a temporary OpenSSL extension file with subjectAltName."""
+    """Write a temporary OpenSSL extension file with SAN + serverAuth."""
     path = _CERT_DIR / "san.ext"
     path.write_text(
         "subjectAltName=IP:127.0.0.1,DNS:localhost\n"
+        "extendedKeyUsage=serverAuth\n"
     )
     return str(path)
 
@@ -151,23 +152,30 @@ def _install_ca_macos() -> None:
     """Add the CA to the system trust store on macOS."""
     ca_path = str(_CA_CERT)
 
-    # 1. Try sudo to the System keychain first (works in terminal, not GUI).
+    subprocess.run(
+        ["security", "delete-certificate", "-c", "llm-relay CA"],
+        capture_output=True,
+    )
+
+    # Electron on macOS uses the System keychain, not login.
+    # We request admin privileges via a native macOS dialog.
+    print("  Adding CA to System keychain (a macOS dialog will appear)...")
+    script = (
+        f'do shell script "security add-trusted-cert -d -r trustRoot'
+        f' -p ssl -k /Library/Keychains/System.keychain'
+        f' {ca_path}"'
+        f' with administrator privileges'
+    )
     result = subprocess.run(
-        [
-            "sudo", "security", "add-trusted-cert",
-            "-d", "-r", "trustRoot", "-p", "ssl",
-            "-k", "/Library/Keychains/System.keychain",
-            ca_path,
-        ],
+        ["osascript", "-e", script],
         capture_output=True,
         text=True,
-        timeout=30,
     )
     if result.returncode == 0:
-        _ok("CA certificate installed in System keychain (trusted for TLS)")
+        _ok("CA certificate installed in System keychain")
         return
 
-    # 2. Try the user keychain (may prompt a GUI dialog).
+    # Fallback: try login keychain with GUI prompt
     result = subprocess.run(
         [
             "security", "add-trusted-cert",
@@ -180,10 +188,9 @@ def _install_ca_macos() -> None:
         timeout=15,
     )
     if result.returncode == 0:
-        _ok("CA certificate installed in login keychain (trusted for TLS)")
+        _ok("CA certificate installed in login keychain")
         return
 
-    # 3. None of the above worked — show manual instructions.
     _print_macos_manual_install(ca_path)
 
 

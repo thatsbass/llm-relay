@@ -77,21 +77,27 @@ def make_handler(
             models = [
                 {
                     "id": "deepseek-v4-pro",
-                    "object": "model",
-                    "created": 1735680000,
-                    "owned_by": "deepseek",
+                    "type": "model",
+                    "display_name": "DeepSeek V4 Pro",
+                    "created_at": "2026-01-01T00:00:00Z",
+                },
+                {
+                    "id": "deepseek-v4-pro[1m]",
+                    "type": "model",
+                    "display_name": "DeepSeek V4 Pro (1M)",
+                    "created_at": "2026-01-01T00:00:00Z",
                 },
                 {
                     "id": "deepseek-v4-flash",
-                    "object": "model",
-                    "created": 1735680000,
-                    "owned_by": "deepseek",
+                    "type": "model",
+                    "display_name": "DeepSeek V4 Flash",
+                    "created_at": "2026-01-01T00:00:00Z",
                 },
                 {
                     "id": "deepseek-chat",
-                    "object": "model",
-                    "created": 1735680000,
-                    "owned_by": "deepseek",
+                    "type": "model",
+                    "display_name": "DeepSeek Chat",
+                    "created_at": "2026-01-01T00:00:00Z",
                 },
             ]
             self._send_json_direct({"object": "list", "data": models})
@@ -558,6 +564,11 @@ def make_handler(
 
             # message_stop
             self._emit("message_stop", {"type": "message_stop"})
+
+            # Signal end of chunked transfer encoding so Claude Desktop
+            # stops the spinner immediately.
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
 
         # ── Response helpers ──────────────────────────────────────────────────
 

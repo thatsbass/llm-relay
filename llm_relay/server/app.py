@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from http.server import HTTPServer
 
 from llm_relay.config import Config
+from llm_relay.routing.engine import RoutingEngine
 from llm_relay.server.handler import make_handler
 from llm_relay.session.store import SessionStore
 from llm_relay.translators.factory import TranslatorFactory
@@ -16,6 +18,16 @@ def create_server(config: Config) -> HTTPServer:
         max_sessions=config.max_sessions,
         trim_to=config.sessions_trim_to,
     )
-    translator    = TranslatorFactory.create(config.backend, config)
-    handler_class = make_handler(config, session_store, translator)
+    primary_translator = TranslatorFactory.create(config.backend, config)
+
+    fallback_translator = None
+    fallback_name = os.environ.get("LLM_RELAY_FALLBACK_BACKEND", "").strip()
+    if fallback_name:
+        try:
+            fallback_translator = TranslatorFactory.create(fallback_name, config)
+        except ValueError:
+            pass  # silently ignore unknown fallback
+
+    routing = RoutingEngine(primary_translator, fallback_translator)
+    handler_class = make_handler(config, session_store, routing)
     return HTTPServer(("127.0.0.1", config.port), handler_class)

@@ -20,6 +20,7 @@ from urllib.error import HTTPError, URLError
 from llm_relay.config import Config
 from llm_relay.parsers.anthropic_messages import parse_anthropic_request
 from llm_relay.parsers.messages import input_to_messages, translate_tools
+from llm_relay.routing.engine import RoutingEngine
 from llm_relay.session.store import SessionStore
 from llm_relay.translators.base import AbstractTranslator
 
@@ -30,16 +31,16 @@ from llm_relay.translators.base import AbstractTranslator
 def make_handler(
     config: Config,
     session_store: SessionStore,
-    translator: AbstractTranslator,
+    routing: RoutingEngine,
 ) -> type:
     """Return a BaseHTTPRequestHandler subclass with dependencies baked in as class attributes."""
 
     class ProxyHandler(BaseHTTPRequestHandler):
         """Per-request HTTP handler for the llm-relay proxy."""
 
-        _config:        Config              = config
-        _session_store: SessionStore        = session_store
-        _translator:    AbstractTranslator  = translator
+        _config:        Config        = config
+        _session_store: SessionStore  = session_store
+        _routing:       RoutingEngine = routing
 
         # ── Logging ───────────────────────────────────────────────────────────
 
@@ -131,13 +132,13 @@ def make_handler(
 
             # ── 4–5. Forward to backend and parse response ────────────────────
             try:
-                payload = self._translator.build_request(
+                payload = self._routing.build_request(
                     messages, tools, max_tokens, tc_count,
                     temperature=req_data.get("temperature"),
                     top_p=req_data.get("top_p"),
                 )
-                raw_resp = self._translator.forward(json.dumps(payload).encode())
-                result   = self._translator.parse_response(raw_resp, req_id)
+                raw_resp = self._routing.forward(json.dumps(payload).encode())
+                result   = self._routing.parse_response(raw_resp, req_id)
 
             except HTTPError as exc:
                 err_body = exc.read().decode("utf-8", errors="replace")
@@ -198,11 +199,11 @@ def make_handler(
                 )
 
             # ── Pass-through path: backend speaks Anthropic natively ──────
-            if hasattr(self._translator, "build_anthropic_request"):
+            if hasattr(self._routing, "build_anthropic_request"):
                 try:
-                    payload = self._translator.build_anthropic_request(req_data)
-                    raw_resp = self._translator.forward(payload)
-                    result = self._translator.parse_anthropic_response(
+                    payload = self._routing.build_anthropic_request(req_data)
+                    raw_resp = self._routing.forward(payload)
+                    result = self._routing.parse_anthropic_response(
                         raw_resp, f"msg_{uuid.uuid4().hex[:24]}",
                     )
                 except HTTPError as exc:
@@ -227,7 +228,7 @@ def make_handler(
                     return
 
                 if stream and getattr(
-                    self._translator, "supports_anthropic_stream_relay", False
+                    self._routing, "supports_anthropic_stream_relay", False
                 ):
                     self._stream_anthropic_response(result.response)
                 elif stream:
@@ -238,14 +239,14 @@ def make_handler(
 
             # ── Translation path: Anthropic → Chat Completions ────────────
             try:
-                payload = self._translator.build_request(
+                payload = self._routing.build_request(
                     parsed.messages, parsed.tools, parsed.max_tokens,
                     0,
                     temperature=parsed.temperature,
                     top_p=parsed.top_p,
                 )
-                raw_resp = self._translator.forward(json.dumps(payload).encode())
-                result   = self._translator.parse_response(
+                raw_resp = self._routing.forward(json.dumps(payload).encode())
+                result   = self._routing.parse_response(
                     raw_resp,
                     f"msg_{uuid.uuid4().hex[:24]}",
                 )

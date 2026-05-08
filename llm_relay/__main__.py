@@ -102,10 +102,75 @@ examples:
     return parser
 
 
+# ── Internal daemon worker ────────────────────────────────────────────────────
+
+
+def _cmd_serve() -> None:
+    """Internal daemon worker — spawned by subprocess.Popen, never called directly.
+
+    Reads the readiness-pipe FD from LLM_RELAY_READY_FD, starts the server,
+    signals the parent with b"ok", then serves forever.  stdout/stderr are
+    already redirected to the log file by the parent before spawning.
+    """
+    import signal
+    from llm_relay.cli import pid as _pid
+    from llm_relay.config import Config
+    from llm_relay.server.app import create_server
+
+    w_fd_str      = os.environ.get("LLM_RELAY_READY_FD", "")
+    w_fd          = int(w_fd_str) if w_fd_str.isdigit() else None
+    effective_port = int(os.environ.get("LLM_RELAY_PORT", "8080"))
+
+    def _fail(msg: str) -> None:
+        if w_fd is not None:
+            try:
+                os.write(w_fd, msg.encode())
+                os.close(w_fd)
+            except OSError:
+                pass
+        sys.exit(1)
+
+    try:
+        config = Config.from_env(port=effective_port)
+    except RuntimeError as exc:
+        _fail(f"Cannot start: {exc}")
+        return  # unreachable, satisfies type checker
+
+    try:
+        server = create_server(config)
+    except OSError as exc:
+        _fail(f"Cannot bind to port {effective_port}: {exc.strerror}")
+        return
+
+    if w_fd is not None:
+        os.write(w_fd, b"ok")
+        os.close(w_fd)
+
+    _pid.write(port=effective_port)
+
+    def _on_sigterm(signum, frame):
+        _pid.clear()
+        server.shutdown()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _on_sigterm)
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        _pid.clear()
+        server.shutdown()
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 
 def main() -> None:
+    # Internal daemon worker — spawned by _start_daemon via subprocess.Popen.
+    if len(sys.argv) >= 2 and sys.argv[1] == "_serve":
+        _cmd_serve()
+        return
+
     parser = _build_parser()
     args   = parser.parse_args()
 

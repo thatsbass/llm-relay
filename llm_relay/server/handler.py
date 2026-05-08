@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 import uuid
 from http.server import BaseHTTPRequestHandler
 from urllib.error import HTTPError, URLError
@@ -46,9 +47,9 @@ def make_handler(
         # ── Logging ───────────────────────────────────────────────────────────
 
         def log_message(self, fmt: str, *args) -> None:
-            """Suppress standard HTTP access logs unless debug mode is on."""
-            if self._config.debug:
-                sys.stderr.write(f"[llm-relay] {args[0]}\n")
+            """Always emit HTTP access logs (method path status) to stderr."""
+            sys.stderr.write(f"[access] {self.log_date_time_string()} {fmt % args}\n")
+            sys.stderr.flush()
 
         # ── GET /health ───────────────────────────────────────────────────────
 
@@ -134,19 +135,18 @@ def make_handler(
                 if m.get("tool_calls") or m.get("role") == "tool"
             )
 
-            # Always log backend for Codex CLI requests.
+            model = req_data.get("model", "?")
             print(
-                f"[llm-relay] responses model={req_data.get('model', '?')}"
-                f" backend={self._config.backend}"
-                f" msgs={len(messages)} tools={len(tools or [])}"
-                f" stream={stream}",
-                file=sys.stderr,
+                f"[req] {req_id}  path=/responses  backend={self._config.backend}"
+                f"  model={model}  msgs={len(messages)}  tools={len(tools or [])}  stream={stream}",
+                file=sys.stderr, flush=True,
             )
 
             if self._config.debug:
                 self._log_request(req_id, messages, tc_count, stream, tools)
 
             # ── 4–5. Forward to backend and parse response ────────────────────
+            t0 = time.monotonic()
             try:
                 payload = self._routing.build_request(
                     messages, tools, max_tokens, tc_count,
@@ -155,12 +155,19 @@ def make_handler(
                 )
                 raw_resp = self._routing.forward(json.dumps(payload).encode())
                 result   = self._routing.parse_response(raw_resp, req_id)
+                elapsed  = time.monotonic() - t0
+                usage    = result.response.get("usage", {})
+                print(
+                    f"[ok]  {req_id}  {elapsed:.1f}s"
+                    f"  in={usage.get('input_tokens', '?')} out={usage.get('output_tokens', '?')}",
+                    file=sys.stderr, flush=True,
+                )
 
             except HTTPError as exc:
                 err_body = exc.read().decode("utf-8", errors="replace")
                 print(
-                    f"[llm-relay] Upstream HTTP {exc.code}: {err_body[:500]}",
-                    file=sys.stderr,
+                    f"[err] {req_id}  upstream HTTP {exc.code}: {err_body[:300]}",
+                    file=sys.stderr, flush=True,
                 )
                 if exc.code == 400:
                     self._log_messages_debug(messages)
@@ -168,7 +175,7 @@ def make_handler(
                 return
 
             except URLError as exc:
-                print(f"[llm-relay] Connection error: {exc.reason}", file=sys.stderr)
+                print(f"[err] {req_id}  connection error: {exc.reason}", file=sys.stderr, flush=True)
                 self.send_error(502, f"Connection error: {exc.reason}")
                 return
 
@@ -206,49 +213,38 @@ def make_handler(
             parsed = parse_anthropic_request(req_data)
             stream = parsed.stream
 
-            # Always log which backend is active (not just in debug mode).
-            backend_label = self._config.backend
+            req_id = f"msg_{uuid.uuid4().hex[:16]}"
             print(
-                f"[llm-relay] anthropic model={parsed.model}"
-                f" backend={backend_label}"
-                f" msgs={len(parsed.messages)} tools={len(parsed.tools or [])}"
-                f" stream={stream}",
-                file=sys.stderr,
+                f"[req] {req_id}  path=/v1/messages  backend={self._config.backend}"
+                f"  model={parsed.model}  msgs={len(parsed.messages)}"
+                f"  tools={len(parsed.tools or [])}  stream={stream}"
+                f"  pass_through={self._routing.has_pass_through()}",
+                file=sys.stderr, flush=True,
             )
-
-            if self._config.debug:
-                print(
-                    f"  pass_through={self._routing.has_pass_through()}"
-                    f"  max_tokens={parsed.max_tokens}",
-                    file=sys.stderr,
-                )
 
             # ── Pass-through path ──────────────────────────────────────
             if self._routing.has_pass_through():
+                t0 = time.monotonic()
                 try:
-                    payload = self._routing.build_anthropic_request(req_data)
-                    if self._config.debug:
-                        print(
-                            f"  [pass-through] forwarding to"
-                            f" {self._routing.primary._full_url()}",
-                            file=sys.stderr,
-                        )
+                    payload  = self._routing.build_anthropic_request(req_data)
                     raw_resp = self._routing.forward(payload)
-                    if self._config.debug:
-                        print(
-                            f"  [pass-through] response len={len(raw_resp)}",
-                            file=sys.stderr,
-                        )
-                    result = self._routing.parse_anthropic_response(
+                    result   = self._routing.parse_anthropic_response(
                         raw_resp, f"msg_{uuid.uuid4().hex[:24]}",
+                    )
+                    elapsed = time.monotonic() - t0
+                    usage   = result.response.get("usage", {})
+                    print(
+                        f"[ok]  {req_id}  {elapsed:.1f}s  [pass-through]"
+                        f"  in={usage.get('input_tokens','?')} out={usage.get('output_tokens','?')}",
+                        file=sys.stderr, flush=True,
                     )
                 except HTTPError as exc:
                     err_body = exc.read().decode("utf-8", errors="replace")
-                    print(f"[llm-relay] Upstream HTTP {exc.code}: {err_body[:500]}", file=sys.stderr)
+                    print(f"[err] {req_id}  upstream HTTP {exc.code}: {err_body[:300]}", file=sys.stderr, flush=True)
                     self.send_error(502, f"Upstream error: {exc.code}")
                     return
                 except URLError as exc:
-                    print(f"[llm-relay] Connection error: {exc.reason}", file=sys.stderr)
+                    print(f"[err] {req_id}  connection error: {exc.reason}", file=sys.stderr, flush=True)
                     self.send_error(502, f"Connection error: {exc.reason}")
                     return
                 except Exception as exc:
@@ -258,33 +254,37 @@ def make_handler(
                     return
 
                 if stream:
-                    if self._config.debug:
-                        print("  → sending simulated SSE stream", file=sys.stderr)
                     self._stream_anthropic_response(result.response)
                 else:
                     self._send_json_direct(result.response)
                 return
 
             # ── Translation path: Anthropic → Chat Completions ──────────
+            t0 = time.monotonic()
             try:
-                payload = self._routing.build_request(
+                payload  = self._routing.build_request(
                     parsed.messages, parsed.tools, parsed.max_tokens,
                     0,
                     temperature=parsed.temperature,
                     top_p=parsed.top_p,
                     model=parsed.model,
                 )
-                if self._config.debug:
-                    print(f"  [translate] forwarding to {self._routing.primary._full_url()}", file=sys.stderr)
                 raw_resp = self._routing.forward(json.dumps(payload).encode())
                 result   = self._routing.parse_response(raw_resp, f"msg_{uuid.uuid4().hex[:24]}")
+                elapsed  = time.monotonic() - t0
+                usage    = result.response.get("usage", {})
+                print(
+                    f"[ok]  {req_id}  {elapsed:.1f}s  [translate→chat_completions]"
+                    f"  in={usage.get('input_tokens','?')} out={usage.get('output_tokens','?')}",
+                    file=sys.stderr, flush=True,
+                )
             except HTTPError as exc:
                 err_body = exc.read().decode("utf-8", errors="replace")
-                print(f"[llm-relay] Upstream HTTP {exc.code}: {err_body[:500]}", file=sys.stderr)
+                print(f"[err] {req_id}  upstream HTTP {exc.code}: {err_body[:300]}", file=sys.stderr, flush=True)
                 self.send_error(502, f"Upstream error: {exc.code}")
                 return
             except URLError as exc:
-                print(f"[llm-relay] Connection error: {exc.reason}", file=sys.stderr)
+                print(f"[err] {req_id}  connection error: {exc.reason}", file=sys.stderr, flush=True)
                 self.send_error(502, f"Connection error: {exc.reason}")
                 return
             except Exception as exc:
@@ -294,8 +294,6 @@ def make_handler(
                 return
 
             if stream:
-                if self._config.debug:
-                    print("  → sending simulated SSE stream", file=sys.stderr)
                 self._stream_anthropic_response(result.response)
             else:
                 self._send_json_direct(result.response)

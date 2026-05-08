@@ -93,7 +93,10 @@ class ChatCompletionsTranslator(AbstractTranslator):
 
         choice  = chat_resp.get("choices", [{}])[0]
         msg     = choice.get("message", {})
-        content = msg.get("content") or ""
+        # Reasoning models (deepseek-v4-pro, glm-5.1, qwen…) return content=""
+        # and put their actual reply in reasoning_content.  Fall back so Claude
+        # Code receives a non-empty response.
+        content = msg.get("content") or msg.get("reasoning_content") or ""
 
         native_tool_calls: list = msg.get("tool_calls") or []
 

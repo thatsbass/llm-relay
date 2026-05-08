@@ -30,11 +30,11 @@ class RoutingEngine:
         return self._primary
 
     def build_request(self, messages, tools, max_tokens, tc_count,
-                      temperature=None, top_p=None):
+                      temperature=None, top_p=None, model=None):
         """Build a request using the primary translator."""
         return self._primary.build_request(
             messages, tools, max_tokens, tc_count,
-            temperature=temperature, top_p=top_p,
+            temperature=temperature, top_p=top_p, model=model,
         )
 
     def forward(self, payload: bytes) -> bytes:

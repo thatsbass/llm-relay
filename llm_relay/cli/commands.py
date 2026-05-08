@@ -33,17 +33,7 @@ def cmd_start(tls: bool = False, port: int | None = None, daemon: bool = False, 
         print("No configuration found — running setup first.\n")
         relay_cfg = _run_wizard()
 
-    if daemon:
-        _start_daemon(relay_cfg, tls=tls, port=port, force=force)
-    else:
-        _run(relay_cfg, tls=tls, port=port)
-
-
-def _start_daemon(relay_cfg: RelayConfig, tls: bool = False, port: int | None = None, force: bool = False) -> None:
-    """Fork, redirect stdout/stderr to log file, return immediately."""
-    effective_port = port if port is not None else relay_cfg.port
-
-    # ── Handle port conflicts ──────────────────────────────────────────
+    # ── Single-instance check ─────────────────────────────────────────
     if _pid.is_running():
         if force:
             _pid.stop()
@@ -51,113 +41,117 @@ def _start_daemon(relay_cfg: RelayConfig, tls: bool = False, port: int | None = 
         else:
             _die(
                 f"Proxy is already running (PID {_pid.read()}).\n"
-                f"  Use llm-relay stop or llm-relay start --daemon --force"
+                f"  Use llm-relay stop or llm-relay start --force"
             )
 
-    if _port_in_use(effective_port):
-        if force:
-            _kill_port(effective_port)
-            _ok(f"Killed process on port {effective_port}")
-        else:
+    # ── Pick the effective port ───────────────────────────────────────
+    # Explicit --port: must match exactly, no fallback.
+    # Otherwise (config default): auto-fall back to a free port if needed.
+    preferred = port if port is not None else relay_cfg.port
+    effective_port = _find_free_port(preferred)
+    if effective_port != preferred:
+        if port is not None:
             _die(
-                f"Port {effective_port} is already in use.\n"
-                f"  Find it:  lsof -ti:{effective_port}\n"
-                f"  Kill it:  llm-relay start --daemon --force"
+                f"Port {preferred} is already in use.\n"
+                f"  Find it:  lsof -ti:{preferred}\n"
+                f"  Kill it:  llm-relay start --force"
             )
+        _info(f"\033[33m⚠\033[0m  Port {preferred} occupé → utilise {effective_port}")
+
+    # Rewrite all downstream env files so the claude/codex wrappers source the
+    # correct URL on their next invocation — no manual `source` needed.
+    _sync_env_files(relay_cfg, effective_port, tls=tls)
+
+    # Truncate the log so historical "Cannot bind" lines don't pollute this run.
+    _LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _LOG_FILE.write_text("", encoding="utf-8")
+
+    if daemon:
+        _start_daemon(relay_cfg, tls=tls, effective_port=effective_port)
+    else:
+        _run(relay_cfg, tls=tls, effective_port=effective_port)
+
+
+def _start_daemon(relay_cfg: RelayConfig, tls: bool = False, effective_port: int = 0) -> None:
+    """Spawn a fresh server subprocess and return immediately.
+
+    Uses subprocess.Popen + start_new_session instead of os.fork() to avoid
+    macOS fork-safety issues with OpenSSL (SIGABRT on first urlopen call).
+    """
+    import subprocess
 
     _ok(f"Using port {effective_port}")
-
-    _LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-
-    os.environ[relay_cfg.env_key_name()] = relay_cfg.api_key
-    if port is not None:
-        os.environ["LLM_RELAY_PORT"] = str(port)
-    if tls:
-        os.environ["LLM_RELAY_TLS"] = "1"
-
-    r_fd, w_fd = os.pipe()
-    child_pid = os.fork()
-
-    if child_pid > 0:
-        # ── Parent ──────────────────────────────────────────────────
-        os.close(w_fd)
-        msg = b""
-        # Wait until the child writes or exits (no timeout — we need the
-        # real result, not a guess).
-        while True:
-            ready, _, _ = select.select([r_fd], [], [], 30)
-            if ready:
-                chunk = os.read(r_fd, 4096)
-                if not chunk:  # EOF — child crashed without writing
-                    break
-                msg += chunk
-                if b"ok" in msg or b"Cannot bind" in msg:
-                    break
-            else:
-                # Timeout after 30s — child likely hung, but we already
-                # got some output.  Break and decide based on what we have.
-                break
-        os.close(r_fd)
-
-        if msg == b"ok":
-            _pid.write(child_pid)
-            scheme = "https" if tls else "http"
-            _ok(f"Proxy started (daemon) → PID {child_pid}")
-            _ok(f"Listening on {scheme}://127.0.0.1:{effective_port}")
-            _ok(f"Backend: {relay_cfg.provider_display()}")
-            _ok(f"Logs: llm-relay logs -f")
-        else:
-            try:
-                os.waitpid(child_pid, 0)
-            except ChildProcessError:
-                pass
-            _pid.clear()
-            error_tail = msg.decode(errors="replace")[:200] if msg else ""
-            _die(
-                f"Proxy failed to start.\n"
-                f"  Logs: llm-relay logs\n"
-                f"{'  ' + error_tail if error_tail else ''}"
-            )
-        return
-
-    # ── Child ──────────────────────────────────────────────────────
-    os.close(r_fd)
 
     if tls:
         from llm_relay.server.tls import ensure_certificate as _ensure_tls
         _ensure_tls()
 
-    os.setsid()
+    env = os.environ.copy()
+    env[relay_cfg.env_key_name()] = relay_cfg.api_key
+    env["LLM_RELAY_BACKEND"] = relay_cfg.provider
+    env["LLM_RELAY_PORT"]    = str(effective_port)
+    if tls:
+        env["LLM_RELAY_TLS"] = "1"
 
-    from llm_relay.config import Config
-    from llm_relay.server.app import create_server
+    # Pipe for readiness signalling: child writes b"ok" when the socket is bound.
+    r_fd, w_fd = os.pipe()
+    env["LLM_RELAY_READY_FD"] = str(w_fd)
 
-    try:
-        config = Config.from_env(port=effective_port)
-    except RuntimeError as exc:
-        os.write(w_fd, str(exc).encode())
-        os.close(w_fd)
-        os._exit(1)
+    log_fd = open(str(_LOG_FILE), "a", buffering=1)
 
-    try:
-        server = create_server(config)
-    except OSError as exc:
-        os.write(w_fd, f"Cannot bind to port {effective_port}: {exc.strerror}".encode())
-        os.close(w_fd)
-        os._exit(1)
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "llm_relay", "_serve"],
+        env=env,
+        stdout=log_fd,
+        stderr=log_fd,
+        start_new_session=True,  # detach from parent's terminal/process group
+        pass_fds=(w_fd,),        # child inherits the write end of the pipe
+    )
+    log_fd.close()
+    os.close(w_fd)  # parent doesn't write to the pipe
 
-    os.write(w_fd, b"ok")
-    os.close(w_fd)
+    # Wait for the child to signal readiness (or failure / EOF).
+    msg = b""
+    while True:
+        ready, _, _ = select.select([r_fd], [], [], 30)
+        if ready:
+            chunk = os.read(r_fd, 4096)
+            if not chunk:   # EOF — child crashed before writing
+                break
+            msg += chunk
+            if b"ok" in msg or b"Cannot" in msg:
+                break
+        else:
+            break           # 30-second timeout
+    os.close(r_fd)
 
-    sys.stdout = open(str(_LOG_FILE), "a")
-    sys.stderr = sys.stdout
-    _run(relay_cfg, tls=tls, port=port, is_daemon=True, _server=server)
+    if msg == b"ok":
+        _pid.write(proc.pid, port=effective_port)
+        scheme = "https" if tls else "http"
+        _ok(f"Proxy started (daemon) → PID {proc.pid}")
+        _ok(f"Listening on {scheme}://127.0.0.1:{effective_port}")
+        _ok(f"Backend: {relay_cfg.provider_display()}")
+        _ok(f"Logs: llm-relay logs -f")
+    else:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        _pid.clear()
+        error_tail = msg.decode(errors="replace")[:200] if msg else ""
+        _die(
+            f"Proxy failed to start.\n"
+            f"  Logs: llm-relay logs\n"
+            f"{'  ' + error_tail if error_tail else ''}"
+        )
 
 
-def _run(relay_cfg: RelayConfig, tls: bool = False, port: int | None = None, is_daemon: bool = False, _server=None) -> None:
-    """Wire relay config into the proxy stack and start serving."""
-    # Inject the API key into the environment so Config.from_env() picks it up.
+def _run(relay_cfg: RelayConfig, tls: bool = False, effective_port: int = 0, is_daemon: bool = False, _server=None) -> None:
+    """Wire relay config into the proxy stack and start serving on *effective_port*."""
+    # Inject the API key + backend so Config.from_env() resolves the right provider.
     os.environ[relay_cfg.env_key_name()] = relay_cfg.api_key
+    os.environ["LLM_RELAY_BACKEND"] = relay_cfg.provider
 
     # Inject fallback config if set.
     if relay_cfg.fallback_provider:
@@ -170,15 +164,13 @@ def _run(relay_cfg: RelayConfig, tls: bool = False, port: int | None = None, is_
     if tls:
         os.environ["LLM_RELAY_TLS"] = "1"
 
-    if port is not None:
-        os.environ["LLM_RELAY_PORT"] = str(port)
+    os.environ["LLM_RELAY_PORT"] = str(effective_port)
 
     # Import here (not at module top) so ``cmd_stop`` / ``cmd_status`` never
     # pay the cost of importing the full server stack.
     from llm_relay.config import Config
     from llm_relay.server.app import create_server
 
-    effective_port = port if port is not None else relay_cfg.port
     try:
         config = Config.from_env(port=effective_port)
     except RuntimeError as exc:
@@ -191,13 +183,13 @@ def _run(relay_cfg: RelayConfig, tls: bool = False, port: int | None = None, is_
             server = create_server(config)
         except OSError as exc:
             _die(
-                f"Cannot bind to port {relay_cfg.port}: {exc.strerror}.\n"
+                f"Cannot bind to port {effective_port}: {exc.strerror}.\n"
                 f"  → Run:  llm-relay config port <other-port>"
             )
 
     # ── PID file + signal handler ─────────────────────────────────────────────
 
-    _pid.write()
+    _pid.write(port=effective_port)
 
     def _on_sigterm(signum, frame):
         _pid.clear()
@@ -212,8 +204,7 @@ def _run(relay_cfg: RelayConfig, tls: bool = False, port: int | None = None, is_
     if not is_daemon:
         print()
         scheme = "https" if tls else "http"
-        eff_port = port if port is not None else relay_cfg.port
-        _ok(f"Proxy running  →  {scheme}://127.0.0.1:{eff_port}")
+        _ok(f"Proxy running  →  {scheme}://127.0.0.1:{effective_port}")
         _ok(f"Backend        →  {relay_cfg.provider_display()}")
         if relay_cfg.fallback_provider:
             fb_name = PROVIDERS.get(
@@ -222,10 +213,11 @@ def _run(relay_cfg: RelayConfig, tls: bool = False, port: int | None = None, is_
             _ok(f"Fallback       →  {fb_name}")
         print()
         print("  Endpoints:")
-        print(f"    {relay_cfg.base_url()}/responses      (Codex CLI)")
-        print(f"    {relay_cfg.base_url()}/v1/responses   (Codex CLI)")
-        print(f"    {relay_cfg.base_url()}/v1/messages    (Claude Code / Desktop)")
-        print(f"    {relay_cfg.base_url()}/v1/models      (Auto-discovery)")
+        base = f"{scheme}://127.0.0.1:{effective_port}"
+        print(f"    {base}/responses      (Codex CLI)")
+        print(f"    {base}/v1/responses   (Codex CLI)")
+        print(f"    {base}/v1/messages    (Claude Code / Desktop)")
+        print(f"    {base}/v1/models      (Auto-discovery)")
         print()
         print("  Press Ctrl+C to stop.\n")
 
@@ -256,23 +248,57 @@ def cmd_stop() -> None:
 
 def cmd_status() -> None:
     """Print the running state and active configuration."""
-    running = _pid.is_running()
-    pid_val = _pid.read()
-    cfg     = config_manager.load()
+    running  = _pid.is_running()
+    pid_val  = _pid.read()
+    eff_port = _pid.read_port()
+    cfg      = config_manager.load()
+
+    # Stale state: PID alive but nothing listens on the bound port.
+    stale = running and eff_port is not None and not _port_in_use(eff_port)
+
+    # Read active model + configured URL from claude-code.env.
+    env_model: str | None = None
+    env_url:   str | None = None
+    if _CLAUDE_ENV.exists():
+        for line in _CLAUDE_ENV.read_text(encoding="utf-8").splitlines():
+            s = line.strip()
+            if s.startswith("export ANTHROPIC_MODEL="):
+                env_model = s.split("=", 1)[1].strip("\"'")
+            elif s.startswith("export ANTHROPIC_BASE_URL="):
+                env_url = s.split("=", 1)[1].strip("\"'")
 
     print()
 
-    if running:
+    if stale:
+        print(f"  \033[33m⚠\033[0m  Stale state: PID {pid_val} alive but port {eff_port} not bound.")
+        print("     Run:  llm-relay stop")
+    elif running:
         _ok(f"Status    : running  (PID {pid_val})")
     else:
         print("  Status    : stopped")
 
     if cfg:
+        # Show the effective bound port when running, the configured pref otherwise.
+        display_port = eff_port if (running and eff_port and not stale) else cfg.port
+        proxy_url    = f"http://127.0.0.1:{display_port}"
         _ok(f"Provider  : {cfg.provider_display()}")
-        _ok(f"Port      : {cfg.port}")
-        _ok(f"URL       : {cfg.base_url()}")
+        if eff_port and eff_port != cfg.port:
+            _ok(f"Port      : {display_port}  (config: {cfg.port})")
+        else:
+            _ok(f"Port      : {display_port}")
+        _ok(f"URL       : {proxy_url}")
+        if env_model:
+            _ok(f"Model     : {env_model}")
         key_hint = f"…{cfg.api_key[-4:]}" if cfg.api_key else "(not set)"
         _ok(f"API key   : {key_hint}")
+
+        # Warn when claude-code.env still points to the wrong URL (e.g. https
+        # vs http, or wrong port from a previous run).
+        if env_url and running and not stale and env_url != proxy_url:
+            print()
+            print(f"  \033[33m⚠\033[0m  claude-code.env → {env_url}")
+            print(f"     Proxy is on     → {proxy_url}")
+            print("     Restart to resync:  llm-relay stop && llm-relay start")
     else:
         print("  Config    : not configured — run:  llm-relay setup")
 
@@ -367,7 +393,7 @@ def cmd_config(subkey: str, value: str) -> None:
         _die(f"Unknown config key {subkey!r}. Supported: port, key")
 
     config_manager.save(cfg)
-    _update_codex(cfg)
+    _sync_env_files(cfg, cfg.port)  # rewrite codex + claude-code.env + .env
     _ok("Config saved.")
 
     if _pid.is_running():
@@ -391,13 +417,31 @@ def _port_in_use(port: int) -> bool:
         return True
 
 
-def _kill_port(port: int) -> None:
-    """Send SIGKILL to whatever process is on *port*."""
-    import subprocess
-    subprocess.run(
-        ["lsof", "-ti", f":{port}", "|", "xargs", "kill", "-9"],
-        shell=True, capture_output=True,
-    )
+def _find_free_port(preferred: int) -> int:
+    """Return *preferred* if it's free, else an OS-picked free port."""
+    if not _port_in_use(preferred):
+        return preferred
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _sync_env_files(cfg: RelayConfig, effective_port: int, tls: bool = False) -> None:
+    """Rewrite all downstream env files (codex, claude-code.env, .env) using
+    *effective_port* + *tls* — so wrappers auto-source URLs that match the
+    actually-running proxy on next exec.
+
+    cfg.port (the user's preference) is preserved on disk; only the runtime
+    artifacts pick up the effective port + scheme.
+    """
+    from dataclasses import replace
+    from llm_relay.cli import config_manager as _cm
+
+    eff_cfg = replace(cfg, port=effective_port)
+    _update_codex(eff_cfg)         # ~/.codex/config.toml
+    _cm._write_env(eff_cfg)        # ~/.llm-relay/.env (codex wrapper sources this)
+    _write_claude_env(cfg.provider, port=effective_port, tls=tls)
 
 
 # ── Print helpers ─────────────────────────────────────────────────────────────
@@ -578,7 +622,10 @@ def cmd_logs(lines: int = 20, follow: bool = False) -> None:
 
     if follow:
         print(f"  Following {_LOG_FILE} (Ctrl+C to stop)...")
-        subprocess.run(["tail", "-f", str(_LOG_FILE)])
+        try:
+            subprocess.run(["tail", "-f", str(_LOG_FILE)])
+        except KeyboardInterrupt:
+            pass
     else:
         content = _LOG_FILE.read_text(encoding="utf-8")
         content_lines = content.strip().split("\n")
@@ -652,34 +699,32 @@ def _patch_path() -> None:
         pass
 
 
-def _write_claude_env(provider: str) -> None:
+def _write_claude_env(provider: str, port: int | None = None, tls: bool = False) -> None:
     """Write ~/.llm-relay/claude-code.env for the given provider.
 
-    Distributes available models across the 5 Claude Code slots so the
-    model picker shows distinct options.
+    *port* and *tls* override cfg defaults — used at start time so the env
+    file's scheme + port match the actually-running proxy.
     """
     from llm_relay.models import get_models_for_backend
 
     models = get_models_for_backend(provider)
-    n = len(models)
-    if n < 2:
+    if not models:
         models = ["deepseek-v4-pro", "deepseek-v4-flash"]
-        n = 2
 
-    # Spread picks across the sorted list for maximum diversity.
-    primary  = models[0]                          # first
-    opus     = models[min(1, n - 1)]              # second
-    sonnet   = models[min(n // 2, n - 1)]         # middle
-    haiku    = models[min(n * 2 // 3, n - 1)]     # two-thirds
-    subagent = models[-1]                         # last (cheapest)
+    # Use the same primary model for every Claude Code model slot so that
+    # all requests — main turns, subagents, tool calls — use the same model.
+    # This prevents confusing log entries where the model switches mid-session
+    # (e.g. glm-5.1 for the main turn but minimax-m2.5 for a spawned subagent).
+    primary  = models[0]
+    opus     = primary
+    sonnet   = primary
+    haiku    = primary
+    subagent = primary
 
-    cfg = config_manager.load()
-    port = cfg.port if cfg else 8080
-    scheme = "https"
-
-    cfg = config_manager.load()
-    port = cfg.port if cfg else 8080
-    scheme = "https"
+    if port is None:
+        cfg  = config_manager.load()
+        port = cfg.port if cfg else 8080
+    scheme = "https" if tls else "http"
 
     _CLAUDE_ENV.parent.mkdir(parents=True, exist_ok=True)
     _CLAUDE_ENV.write_text(f"""# llm-relay — Claude Code environment

@@ -81,10 +81,21 @@ Le proxy tourne en arrière-plan. Pour l'arrêter : `llm-relay stop`.
 ```bash
 llm-relay logs               # 20 dernières lignes
 llm-relay logs -n 100         # 100 lignes
-llm-relay logs -f             # suivre en direct (Ctrl+C pour quitter)
+llm-relay logs -f             # suivre en direct (Ctrl+C quitte proprement)
 ```
 
 Fichier : `~/.llm-relay/proxy.log`
+
+Le log est tronqué automatiquement à chaque démarrage — les erreurs d'une session précédente n'y figurent pas.
+
+Format des lignes :
+```
+[llm-relay] started  backend=opencode  url=http://127.0.0.1:8080  tls=False  debug=False
+[req] msg_abc123  path=/v1/messages  backend=opencode  model=glm-5.1  msgs=3  tools=64  stream=True
+[ok]  msg_abc123  2.3s  [translate→chat_completions]  in=150 out=420
+[err] msg_xyz456  upstream HTTP 403: error code: 1010
+[access] 08/May/2026 16:43:13 "POST /v1/messages HTTP/1.1" 200 -
+```
 
 ### 5. État
 
@@ -93,12 +104,15 @@ llm-relay status
 ```
 
 ```
-  ✓ Status    : running  (PID 12345)
-  ✓ Provider  : DeepSeek
-  ✓ Port      : 8443
-  ✓ URL       : https://127.0.0.1:8443
-  ✓ API key   : …abcd
+  ✓ Status    : running  (PID 64199)
+  ✓ Provider  : OpenCode Go
+  ✓ Port      : 8080
+  ✓ URL       : http://127.0.0.1:8080
+  ✓ Model     : glm-5.1
+  ✓ API key   : …UJLi
 ```
+
+`status` affiche aussi un avertissement si `claude-code.env` pointe vers une URL différente de celle du proxy (exemple : `https://` au lieu de `http://`, ou mauvais port). Dans ce cas, redémarrer le proxy suffit à resynchroniser.
 
 ---
 
@@ -124,11 +138,10 @@ llm-relay stop && llm-relay start --daemon
 
 ```bash
 llm-relay claude proxy
-source ~/.llm-relay/claude-code.env
-claude
+claude   # le wrapper ~/.llm-relay/bin/claude source l'env automatiquement
 ```
 
-Le proxy route vers le backend configuré (DeepSeek, OpenCode Go, etc.).
+Le wrapper `claude` (dans `~/.llm-relay/bin/`) source `~/.llm-relay/claude-code.env` à chaque invocation — **pas besoin de `source` manuel**. Le proxy route vers le backend configuré (DeepSeek, OpenCode Go, etc.).
 
 ### Directement vers ton abonnement Anthropic
 
@@ -141,20 +154,20 @@ claude
 
 ### Fichier d'environnement généré
 
-`~/.llm-relay/claude-code.env` contient toutes les variables nécessaires :
+`~/.llm-relay/claude-code.env` est réécrit à chaque `llm-relay start` avec le bon port et le bon schéma (`http://` ou `https://`) :
 
 ```bash
-export ANTHROPIC_BASE_URL="https://127.0.0.1:8443"
+export ANTHROPIC_BASE_URL="http://127.0.0.1:8080"
 export ANTHROPIC_AUTH_TOKEN="llm-relay"
-export ANTHROPIC_MODEL="deepseek-v4-pro"
-export ANTHROPIC_DEFAULT_OPUS_MODEL="deepseek-v4-pro"
-export ANTHROPIC_DEFAULT_SONNET_MODEL="deepseek-v4-pro"
-export ANTHROPIC_DEFAULT_HAIKU_MODEL="deepseek-v4-flash"
-export CLAUDE_CODE_SUBAGENT_MODEL="deepseek-v4-flash"
+export ANTHROPIC_MODEL="glm-5.1"
+export ANTHROPIC_DEFAULT_OPUS_MODEL="glm-5.1"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="glm-5.1"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="glm-5.1"
+export CLAUDE_CODE_SUBAGENT_MODEL="glm-5.1"
 export CLAUDE_CODE_EFFORT_LEVEL="max"
 ```
 
-Le fichier est sourcé automatiquement dans ton shell profile (`.zshrc`/`.bashrc`) lors du `llm-relay setup`.
+**Tous les slots pointent vers le même modèle primaire.** Claude Code dispose de cinq slots (`ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`) utilisés selon la nature de la tâche (tour principal, sous-agents, etc.). Les mettre tous au même modèle garantit un comportement cohérent et des logs prévisibles — le modèle ne change pas silencieusement entre les requêtes.
 
 ---
 

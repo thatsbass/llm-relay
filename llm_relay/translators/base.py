@@ -69,6 +69,8 @@ class AbstractTranslator(ABC):
         request = Request(url, data=payload, method="POST")
         request.add_header("Content-Type", "application/json")
         request.add_header("Authorization", f"Bearer {self._config.api_key}")
+        request.add_header("Accept", "application/json")
+        request.add_header("User-Agent", "curl/8.7.1")
 
         ctx = ssl.create_default_context()
         return urlopen(request, context=ctx, timeout=120).read()

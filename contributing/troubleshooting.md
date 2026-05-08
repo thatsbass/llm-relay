@@ -66,33 +66,65 @@ Le stream SSE ne se termine pas correctement. Mettre à jour llm-relay.
 
 ### "Unable to connect to API (ConnectionRefused)"
 
-Le proxy n'est pas démarré ou le port est incorrect.
+Le proxy n'est pas démarré, le port est incorrect, ou `claude-code.env` pointe vers la mauvaise URL.
 
 ```bash
-llm-relay status                    # Vérifier si le proxy tourne
-llm-relay start --daemon --tls      # Le démarrer si arrêté
-source ~/.llm-relay/claude-code.env # Recharger les vars
+# 1. Vérifier l'état du proxy (affiche aussi les divergences d'URL)
+llm-relay status
+
+# 2. Si le proxy est arrêté, le démarrer
+llm-relay start --daemon
+
+# 3. Si status affiche un avertissement URL (⚠), redémarrer suffit
+llm-relay stop && llm-relay start --daemon
+```
+
+> **Note** : le wrapper `~/.llm-relay/bin/claude` source `claude-code.env` automatiquement. Pas besoin de `source` manuel — s'assurer que `which claude` renvoie `~/.llm-relay/bin/claude`.
+
+### `claude-code.env` pointe vers `https://` mais le proxy est HTTP
+
+`llm-relay status` détecte et signale cette divergence :
+
+```
+  ⚠  claude-code.env → https://127.0.0.1:8080
+     Proxy is on     → http://127.0.0.1:8080
+     Restart to resync:  llm-relay stop && llm-relay start
+```
+
+Solution : redémarrer le proxy — `cmd_start` réécrit le fichier avec le bon schéma.
+
+### Le modèle change entre les requêtes (ex. glm-5.1 → minimax-m2.5)
+
+Claude Code utilise cinq slots de modèles différents selon la tâche (tour principal, sous-agents, etc.). Si les slots pointent vers des modèles différents, les logs montrent des modèles qui alternent.
+
+**Diagnostic :**
+```bash
+cat ~/.llm-relay/claude-code.env   # vérifier que tous les slots sont identiques
+llm-relay logs                     # chercher les lignes [req] model=...
+```
+
+**Solution :** redémarrer — `llm-relay start` réécrit le fichier en alignant tous les slots sur le modèle primaire :
+```bash
+llm-relay stop && llm-relay start --daemon
 ```
 
 ### Claude Code utilise Anthropic au lieu du proxy
 
 ```bash
 llm-relay claude proxy
-source ~/.llm-relay/claude-code.env
+# Le wrapper source l'env automatiquement — pas besoin de `source`
 ```
 
 ### Claude Code utilise le proxy au lieu d'Anthropic
 
 ```bash
 llm-relay claude direct
-# Entrer ta clé API Anthropic
-source ~/.llm-relay/claude-code.env
 ```
 
 ### Le proxy ne répond pas / timeout
 
 ```bash
-llm-relay logs -f                    # Voir les logs en direct
+llm-relay logs -f                    # Voir les logs en direct (Ctrl+C pour quitter)
 ```
 
 Chercher les erreurs `Upstream HTTP` ou `Connection error`.
@@ -128,18 +160,17 @@ sudo security add-trusted-cert -d -r trustRoot \
 
 ### "Address already in use"
 
-Un autre processus occupe le port.
+Depuis la v0.2, llm-relay choisit **automatiquement** un port libre si le port configuré est occupé — pas besoin d'intervention manuelle. `llm-relay status` affiche le port effectif.
 
-```bash
-llm-relay stop
-# ou forcer :
-lsof -ti:8080 | xargs kill -9
-```
-
-Changer de port :
+Si tu veux fixer un port permanent :
 ```bash
 llm-relay config port 8081
-llm-relay start --daemon --port 8081
+llm-relay stop && llm-relay start --daemon
+```
+
+Pour forcer le kill d'un ancien processus bloquant :
+```bash
+llm-relay start --force   # kill l'ancien processus puis redémarre
 ```
 
 ---
@@ -185,10 +216,17 @@ llm-relay backend list
 ```bash
 llm-relay logs            # Dernières 20 lignes
 llm-relay logs -n 100     # 100 dernières lignes
-llm-relay logs -f         # Suivre en direct (Ctrl+C pour quitter)
+llm-relay logs -f         # Suivre en direct — Ctrl+C quitte proprement (pas de traceback)
 ```
 
-Fichier : `~/.llm-relay/proxy.log`
+Fichier : `~/.llm-relay/proxy.log` — tronqué à chaque démarrage.
+
+### `llm-relay logs -f` affiche un traceback sur Ctrl+C
+
+Comportement corrigé depuis la v0.2.2. Mettre à jour :
+```bash
+llm-relay update
+```
 
 ---
 
@@ -212,20 +250,56 @@ Le cache est valide 1 heure. Les modèles statiques (DeepSeek) n'ont pas besoin 
 
 ---
 
+## Backend / Upstream
+
+### "Upstream HTTP 403: error code: 1010" (OpenCode Go)
+
+Cloudflare WAF bloque le User-Agent par défaut de Python urllib. Corrigé depuis la v0.2.2 — le proxy envoie `User-Agent: curl/8.7.1`.
+
+```bash
+llm-relay update
+llm-relay stop && llm-relay start --daemon
+```
+
+### Le daemon crashe silencieusement après le premier appel (macOS)
+
+Symptôme : le daemon démarre, répond au `/health`, puis disparaît dès la première requête. macOS affiche une popup "Python s'est arrêté".
+
+Cause : `os.fork()` après l'import de `ssl`/OpenSSL laisse des mutex internes dans un état incohérent dans le processus enfant — le premier `urlopen()` déclenche un `SIGABRT`.
+
+Corrigé depuis la v0.2.2 : le daemon utilise désormais `subprocess.Popen(..., start_new_session=True)` au lieu de `os.fork()`.
+
+```bash
+llm-relay update
+llm-relay stop && llm-relay start --daemon
+```
+
+---
+
 ## Diagnostic rapide
 
 ```bash
-# État complet du proxy
+# État complet du proxy (port, modèle, avertissement URL)
 llm-relay status
 
 # Vérifier que le proxy répond
-curl -sk https://127.0.0.1:8443/health
+curl http://127.0.0.1:8080/health
+# → {"status": "ok"}
 
 # Tester le endpoint models
-curl -sk https://127.0.0.1:8443/v1/models | python3 -m json.tool
+curl http://127.0.0.1:8080/v1/models | python3 -m json.tool
 
-# Tester le endpoint messages
-curl -sk https://127.0.0.1:8443/v1/messages \
+# Tester le endpoint messages (Anthropic format)
+curl http://127.0.0.1:8080/v1/messages \
   -H "Content-Type: application/json" \
-  -d '{"model":"x","max_tokens":5,"messages":[{"role":"user","content":"hi"}]}'
+  -H "x-api-key: test" \
+  -d '{"model":"glm-5.1","max_tokens":20,"messages":[{"role":"user","content":"say: ok"}]}'
+
+# Voir les logs en direct
+llm-relay logs -f
+
+# Tuer proprement si bloqué
+pkill -f "llm_relay _serve"
+rm -f ~/.llm-relay/proxy.pid ~/.llm-relay/effective_port
+llm-relay start --daemon
 ```

@@ -26,7 +26,7 @@ _CODEX_BIN  = Path.home() / ".llm-relay" / "bin" / "codex"
 # ── start ─────────────────────────────────────────────────────────────────────
 
 
-def cmd_start(tls: bool = False, port: int | None = None, daemon: bool = False) -> None:
+def cmd_start(tls: bool = False, port: int | None = None, daemon: bool = False, force: bool = False) -> None:
     """Start the proxy, running setup first if not yet configured."""
     relay_cfg = config_manager.load()
     if not relay_cfg or not relay_cfg.api_key.strip():
@@ -34,19 +34,38 @@ def cmd_start(tls: bool = False, port: int | None = None, daemon: bool = False) 
         relay_cfg = _run_wizard()
 
     if daemon:
-        _start_daemon(relay_cfg, tls=tls, port=port)
+        _start_daemon(relay_cfg, tls=tls, port=port, force=force)
     else:
         _run(relay_cfg, tls=tls, port=port)
 
 
-def _start_daemon(relay_cfg: RelayConfig, tls: bool = False, port: int | None = None) -> None:
-    """Fork, redirect stdout/stderr to log file, return immediately.
+def _start_daemon(relay_cfg: RelayConfig, tls: bool = False, port: int | None = None, force: bool = False) -> None:
+    """Fork, redirect stdout/stderr to log file, return immediately."""
+    effective_port = port if port is not None else relay_cfg.port
 
-    Uses a pipe so the parent can detect whether the child successfully
-    bound the port or crashed — avoids reporting success for a dead daemon.
-    """
+    # ── Handle port conflicts ──────────────────────────────────────────
     if _pid.is_running():
-        _die("Proxy is already running. Use llm-relay stop first.")
+        if force:
+            _pid.stop()
+            _ok("Killed old proxy process")
+        else:
+            _die(
+                f"Proxy is already running (PID {_pid.read()}).\n"
+                f"  Use llm-relay stop or llm-relay start --daemon --force"
+            )
+
+    # Check if the port is occupied by a non-llm-relay process.
+    occupied = _port_in_use(effective_port)
+    if occupied:
+        if force:
+            _kill_port(effective_port)
+            _ok(f"Killed process on port {effective_port}")
+        else:
+            _die(
+                f"Port {effective_port} is already in use.\n"
+                f"  Find it:  lsof -ti:{effective_port}\n"
+                f"  Kill it:  llm-relay start --daemon --force"
+            )
 
     _LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
@@ -60,10 +79,8 @@ def _start_daemon(relay_cfg: RelayConfig, tls: bool = False, port: int | None = 
     child_pid = os.fork()
 
     if child_pid > 0:
-        # ── Parent ──────────────────────────────────────────────────────
+        # ── Parent ──────────────────────────────────────────────────
         os.close(w_fd)
-
-        # Wait up to 15 s for the child (TLS cert generation can be slow).
         ready, _, _ = select.select([r_fd], [], [], 15)
         msg = os.read(r_fd, 1024) if ready else b""
         os.close(r_fd)
@@ -71,13 +88,11 @@ def _start_daemon(relay_cfg: RelayConfig, tls: bool = False, port: int | None = 
         if msg == b"ok":
             _pid.write(child_pid)
             scheme = "https" if tls else "http"
-            eff_port = port if port is not None else relay_cfg.port
             _ok(f"Proxy started (daemon) → PID {child_pid}")
-            _ok(f"Listening on {scheme}://127.0.0.1:{eff_port}")
+            _ok(f"Listening on {scheme}://127.0.0.1:{effective_port}")
             _ok(f"Backend: {relay_cfg.provider_display()}")
             _ok(f"Logs: llm-relay logs -f")
         else:
-            # Collect the child's exit to avoid zombies.
             try:
                 os.waitpid(child_pid, 0)
             except ChildProcessError:
@@ -91,10 +106,9 @@ def _start_daemon(relay_cfg: RelayConfig, tls: bool = False, port: int | None = 
             )
         return
 
-    # ── Child ──────────────────────────────────────────────────────────
+    # ── Child ──────────────────────────────────────────────────────
     os.close(r_fd)
 
-    # Generate TLS certs before redirecting output (no logging yet).
     if tls:
         from llm_relay.server.tls import ensure_certificate as _ensure_tls
         _ensure_tls()
@@ -104,7 +118,6 @@ def _start_daemon(relay_cfg: RelayConfig, tls: bool = False, port: int | None = 
     from llm_relay.config import Config
     from llm_relay.server.app import create_server
 
-    effective_port = port if port is not None else relay_cfg.port
     try:
         config = Config.from_env(port=effective_port)
     except RuntimeError as exc:
@@ -119,7 +132,6 @@ def _start_daemon(relay_cfg: RelayConfig, tls: bool = False, port: int | None = 
         os.close(w_fd)
         os._exit(1)
 
-    # Server is ready — tell the parent, then redirect output.
     os.write(w_fd, b"ok")
     os.close(w_fd)
 
@@ -348,6 +360,30 @@ def cmd_config(subkey: str, value: str) -> None:
         print()
         print("  Proxy is running — restart it for changes to take effect:")
         print("    llm-relay stop && llm-relay start")
+
+
+# ── Daemon helpers ──────────────────────────────────────────────────────────
+
+
+def _port_in_use(port: int) -> bool:
+    """Return True if *port* is already bound by any process."""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(("127.0.0.1", port))
+        s.close()
+        return False
+    except OSError:
+        return True
+
+
+def _kill_port(port: int) -> None:
+    """Send SIGKILL to whatever process is on *port*."""
+    import subprocess
+    subprocess.run(
+        ["lsof", "-ti", f":{port}", "|", "xargs", "kill", "-9"],
+        shell=True, capture_output=True,
+    )
 
 
 # ── Print helpers ─────────────────────────────────────────────────────────────

@@ -63,6 +63,11 @@ examples:
         default=None,
         help="Port (default: 8080)",
     )
+    start_p.add_argument(
+        "--force", "-f",
+        action="store_true",
+        help="Kill old proxy process before starting",
+    )
     subparsers.add_parser("stop", help="Stop the proxy")
     subparsers.add_parser("status", help="Show running state and config")
     subparsers.add_parser("setup", help="Re-run setup wizard")
@@ -153,7 +158,8 @@ def main() -> None:
         ).lower() in ("1", "true", "yes")
         port = getattr(args, "port", None)
         daemon = getattr(args, "daemon", False)
-        cmd_start(tls=tls, port=port, daemon=daemon)
+        force = getattr(args, "force", False)
+        cmd_start(tls=tls, port=port, daemon=daemon, force=force)
 
 
 if __name__ == "__main__":

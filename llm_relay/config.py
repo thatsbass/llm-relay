@@ -6,6 +6,15 @@ import os
 from dataclasses import dataclass, field
 
 
+# ── Provider → env-key mapping ───────────────────────────────────────────────
+
+_PROVIDER_ENV_KEYS: dict[str, str] = {
+    "deepseek":           "DEEPSEEK_API_KEY",
+    "deepseek-anthropic": "DEEPSEEK_API_KEY",
+    "opencode":           "OPENCODE_API_KEY",
+}
+
+
 # ── Defaults ─────────────────────────────────────────────────────────────────
 
 _DEFAULT_MAX_HISTORY_MESSAGES: int = 40
@@ -98,20 +107,22 @@ class Config:
         """Build a Config from environment variables.
 
         Raises:
-            RuntimeError: If DEEPSEEK_API_KEY is not set.
+            RuntimeError: If the provider's API key env var is not set.
         """
-        api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+        backend = os.environ.get("LLM_RELAY_BACKEND", "deepseek").lower()
+        env_key = _PROVIDER_ENV_KEYS.get(backend, "DEEPSEEK_API_KEY")
+        api_key = os.environ.get(env_key, "").strip()
         if not api_key:
             raise RuntimeError(
-                "DEEPSEEK_API_KEY environment variable is not set.\n"
-                "  → run: llm-relay config key sk-your-key"
+                f"{env_key} environment variable is not set.\n"
+                f"  → run: llm-relay config key <your-key>"
             )
 
         env_debug = os.environ.get("LLM_RELAY_DEBUG", "")
         return cls(
             port=int(os.environ.get("LLM_RELAY_PORT", port)),
             api_key=api_key,
-            backend=os.environ.get("LLM_RELAY_BACKEND", "deepseek").lower(),
+            backend=backend,
             debug=debug or env_debug.lower() in ("1", "true", "yes"),
             max_output_tokens=int(
                 os.environ.get("LLM_RELAY_MAX_TOKENS", _DEFAULT_MAX_OUTPUT_TOKENS)

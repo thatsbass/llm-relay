@@ -22,7 +22,7 @@ CLAUDE_CODE_ENV = Path.home() / ".llm-relay" / "claude-code.env"
 # ── Public API ────────────────────────────────────────────────────────────────
 
 
-def write_all(base_url: str, port: int, tls: bool = True) -> None:
+def write_all(base_url: str, port: int, tls: bool = True, provider: str = "deepseek") -> None:
     """Write Claude Desktop 3P config and Claude Code env file.
 
     Defaults to HTTPS because Claude Desktop 3P requires it.
@@ -30,28 +30,32 @@ def write_all(base_url: str, port: int, tls: bool = True) -> None:
     scheme = "https" if tls else "http"
     url = f"{scheme}://127.0.0.1:{port}"
 
-    _write_3p_config(url)
+    _write_3p_config(url, provider)
     _write_claude_code_env(url)
 
 
-def _write_3p_config(gateway_url: str) -> None:
+def _write_3p_config(gateway_url: str, provider: str = "deepseek") -> None:
     """Create or update the Claude Desktop 3P gateway configuration."""
     CONFIG_LIBRARY.mkdir(parents=True, exist_ok=True)
 
     config_id = _ensure_config_id()
 
-    config_path = CONFIG_LIBRARY / f"{config_id}.json"
-    config_path.write_text(json.dumps({
+    # Anthropic model names that Claude Desktop accepts + our proxy maps.
+    models = ["claude-sonnet-4-6", "claude-haiku-4-5"]
+    if "opencode" in provider:
+        models.extend(["glm-5", "kimi-k2.6", "qwen3.6-plus"])
+
+    config = {
         "inferenceProvider": "gateway",
         "inferenceGatewayBaseUrl": gateway_url,
         "inferenceGatewayApiKey": "llm-relay",
         "inferenceGatewayAuthScheme": "bearer",
         "disableDeploymentModeChooser": False,
-        "inferenceModels": [
-            "claude-sonnet-4-6",
-            "claude-haiku-4-5",
-        ],
-    }, indent=2), encoding="utf-8")
+        "inferenceModels": models,
+    }
+
+    config_path = CONFIG_LIBRARY / f"{config_id}.json"
+    config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
     meta_path = CONFIG_LIBRARY / "_meta.json"
     meta_path.write_text(json.dumps({

@@ -408,7 +408,7 @@ def cmd_backend(name: str | None = None) -> None:
 
     # Update Claude Desktop 3P config.
     from llm_relay.cli import claude_writer
-    claude_writer.write_all(cfg.base_url(), cfg.port)
+    claude_writer.write_all(cfg.base_url(), cfg.port, provider=name)
 
     if _pid.is_running():
         print()

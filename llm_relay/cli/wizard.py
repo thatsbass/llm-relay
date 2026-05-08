@@ -135,7 +135,7 @@ def _save(config: RelayConfig) -> None:
     print()
     tls = os.environ.get("LLM_RELAY_TLS", "").lower() in ("1", "true", "yes")
     # Default to HTTPS — Claude Desktop 3P requires it.
-    claude_writer.write_all(config.base_url(), config.port, tls=(tls or True))
+    claude_writer.write_all(config.base_url(), config.port, tls=(tls or True), provider=config.provider)
 
 
 # ── Shell profile helpers ─────────────────────────────────────────────────────

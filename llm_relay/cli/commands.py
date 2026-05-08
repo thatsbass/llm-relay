@@ -535,8 +535,7 @@ def _write_claude_env(provider: str) -> None:
 
     cfg = config_manager.load()
     port = cfg.port if cfg else 8080
-    tls = os.environ.get("LLM_RELAY_TLS", "").lower() in ("1", "true", "yes")
-    scheme = "https" if tls else "http"
+    scheme = "https"  # Claude Desktop + Code require HTTPS by default.
 
     _CLAUDE_ENV.parent.mkdir(parents=True, exist_ok=True)
     _CLAUDE_ENV.write_text(f"""# llm-relay — Claude Code environment

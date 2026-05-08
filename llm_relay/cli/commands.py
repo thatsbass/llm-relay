@@ -539,16 +539,22 @@ def cmd_logs(lines: int = 20, follow: bool = False) -> None:
 # ── models ─────────────────────────────────────────────────────────────────────
 
 
-def cmd_models(refresh: bool = False) -> None:
-    """List available models for the current backend."""
-    from llm_relay.models import get_models_for_backend, refresh_models
+def cmd_models(backend: str | None = None, refresh: bool = False) -> None:
+    """List available models for a given backend (default: current)."""
+    from llm_relay.models import get_models_for_backend, refresh_models, PROVIDER_MODEL_SOURCES
+
+    if backend is None:
+        cfg = config_manager.load()
+        backend = cfg.provider if cfg else "deepseek"
+
+    if backend not in PROVIDER_MODEL_SOURCES:
+        choices = ", ".join(PROVIDER_MODEL_SOURCES)
+        _die(f"Unknown backend {backend!r}. Available: {choices}")
 
     if refresh:
-        refresh_models()
-        _ok("Models refreshed from OpenCode Go API")
+        refresh_models(backend)
+        _ok(f"Models refreshed from {backend} API")
 
-    cfg = config_manager.load()
-    backend = cfg.provider if cfg else "deepseek"
     models = get_models_for_backend(backend)
     print()
     print(f"  Models for {backend}:")
@@ -598,18 +604,13 @@ def _patch_path() -> None:
 
 def _write_claude_env(provider: str) -> None:
     """Write ~/.llm-relay/claude-code.env for the given provider."""
-    from llm_relay.models import get_models_for_backend, ANTHROPIC_MODEL_IDS
+    from llm_relay.models import get_models_for_backend
 
-    if "opencode" in provider:
-        models = get_models_for_backend(provider)
-        primary = models[0] if models else "glm-5"
-        # Use the first two available models as primary/flash.
-    else:
-        primary = "deepseek-v4-pro"
-
+    models = get_models_for_backend(provider)
+    primary = models[0] if models else "deepseek-v4-pro"
     flash = "deepseek-v4-flash"
-    for m in get_models_for_backend(provider):
-        if "flash" in m or "kimi" in m:
+    for m in models:
+        if "flash" in m.lower() or "haiku" in m.lower():
             flash = m
             break
 

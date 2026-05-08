@@ -1,71 +1,118 @@
-"""Model list management — cached fetch from OpenCode Go API."""
+"""Model list management — provider-agnostic, with API fetch + local cache.
+
+Adding a new provider only requires one entry in PROVIDER_MODEL_SOURCES.
+"""
 
 from __future__ import annotations
 
 import json
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-_CACHE_FILE  = Path.home() / ".llm-relay" / "opencode_models.json"
-_CACHE_TTL   = 3600  # 1 hour
-_FETCH_URL   = "https://opencode.ai/zen/go/v1/models"
+_CACHE_FILE = Path.home() / ".llm-relay" / "models_cache.json"
+_CACHE_TTL  = 3600  # 1 hour
 
-# Anthropic model names the proxy maps (always accepted by Claude Desktop).
-ANTHROPIC_MODEL_IDS = [
-    "claude-sonnet-4-6",
-    "claude-haiku-4-5",
-]
 
-# Map Anthropic model names → default backend model IDs.
-ANTHROPIC_TO_DEEPSEEK = {
-    "claude-sonnet-4-6":  "deepseek-v4-pro",
-    "claude-sonnet-4-5":  "deepseek-v4-pro",
-    "claude-opus-4-7":    "deepseek-v4-pro",
-    "claude-opus-4-6":    "deepseek-v4-pro",
-    "claude-haiku-4-5":   "deepseek-v4-flash",
-    "claude-sonnet-4":    "deepseek-v4-pro",
-    "claude-opus-4":      "deepseek-v4-pro",
-    "claude-haiku-3-5":   "deepseek-v4-flash",
+# ── Model source registry ─────────────────────────────────────────────────────
+
+
+@dataclass
+class ModelSource:
+    """Describes where to get the model list for a provider.
+
+    *static*  — the list never changes (hardcoded Anthropic IDs).
+    *api*     — the list is fetched from a URL and cached locally.
+    """
+    kind:     str          # "static" | "api"
+    ids:      list[str]    # static model IDs (for kind="static")
+    url:      str          # fetch URL (for kind="api")
+
+    @classmethod
+    def static(cls, ids: list[str]) -> "ModelSource":
+        return cls(kind="static", ids=ids, url="")
+
+    @classmethod
+    def api(cls, url: str) -> "ModelSource":
+        return cls(kind="api", ids=[], url=url)
+
+
+# Add a new provider here — everything else picks it up automatically.
+PROVIDER_MODEL_SOURCES: dict[str, ModelSource] = {
+    "deepseek":           ModelSource.static(["claude-sonnet-4-6", "claude-haiku-4-5"]),
+    "deepseek-anthropic": ModelSource.static(["claude-sonnet-4-6", "claude-haiku-4-5"]),
+    "opencode":           ModelSource.api("https://opencode.ai/zen/go/v1/models"),
 }
 
 
-def get_opencode_models(force_refresh: bool = False) -> list[str]:
-    """Return available OpenCode Go model IDs, from cache or API."""
-    if not force_refresh and _cache_valid():
-        return _read_cache()
-
-    try:
-        req = Request(_FETCH_URL, method="GET")
-        req.add_header("Accept", "application/json")
-        data = json.loads(urlopen(req, timeout=10).read())
-        ids = sorted(m["id"] for m in data.get("data", []))
-        _write_cache(ids)
-        return ids
-    except Exception:
-        # Return stale cache if available, else hardcoded fallback.
-        cached = _read_cache()
-        if cached:
-            return cached
-        return _FALLBACK_MODELS
+# ── Public API ────────────────────────────────────────────────────────────────
 
 
 def get_models_for_backend(backend: str) -> list[str]:
-    """Return model IDs appropriate for the given backend."""
-    if "opencode" in backend:
-        return get_opencode_models()
-    return ANTHROPIC_MODEL_IDS
+    """Return model IDs for *backend* (from cache, API, or static list)."""
+    source = PROVIDER_MODEL_SOURCES.get(backend)
+    if source is None:
+        return []
+
+    if source.kind == "static":
+        return list(source.ids)
+
+    # API source — try cache first.
+    cached = _read_cache_key(backend)
+    if cached and not _cache_expired(backend):
+        return cached
+
+    return _fetch_and_cache(backend, source.url)
 
 
-def refresh_models() -> list[str]:
-    """Force-refresh the OpenCode Go model cache."""
-    return get_opencode_models(force_refresh=True)
+def refresh_models(backend: str) -> list[str]:
+    """Force-refresh the model list for *backend* from its API source."""
+    source = PROVIDER_MODEL_SOURCES.get(backend)
+    if source is None or source.kind != "api":
+        return get_models_for_backend(backend)
+
+    return _fetch_and_cache(backend, source.url, force=True)
 
 
-# ── Internal ───────────────────────────────────────────────────────────────────
+# ── Internal helpers ──────────────────────────────────────────────────────────
 
 
-_FALLBACK_MODELS = [
+def _cache_expired(backend: str) -> bool:
+    cache = _load_cache()
+    ts = cache.get(f"{backend}_ts", 0)
+    return (time.time() - ts) >= _CACHE_TTL
+
+
+def _read_cache_key(backend: str) -> list[str]:
+    return _load_cache().get(backend, [])
+
+
+def _fetch_and_cache(backend: str, url: str, force: bool = False) -> list[str]:
+    """Fetch model IDs from *url*, update cache, return them.
+
+    Falls back to a cached copy on network errors; if no cache exists
+    the *ids* field of the ModelSource is used as a last-resort fallback.
+    """
+    try:
+        req = Request(url, method="GET")
+        req.add_header("Accept", "application/json")
+        data = json.loads(urlopen(req, timeout=10).read())
+        ids = sorted(m["id"] for m in data.get("data", []))
+    except Exception:
+        cached = _read_cache_key(backend)
+        if cached:
+            return cached
+        # Absolute last resort — use the hardcoded fallback if defined.
+        source = PROVIDER_MODEL_SOURCES.get(backend)
+        fallback = source.ids if source else []
+        return fallback or _GLOBAL_FALLBACK
+
+    _write_cache_key(backend, ids)
+    return ids
+
+
+_GLOBAL_FALLBACK = [
     "glm-5.1", "glm-5", "kimi-k2.6", "kimi-k2.5",
     "deepseek-v4-pro", "deepseek-v4-flash",
     "qwen3.6-plus", "qwen3.5-plus",
@@ -74,19 +121,20 @@ _FALLBACK_MODELS = [
 ]
 
 
-def _cache_valid() -> bool:
-    if not _CACHE_FILE.exists():
-        return False
-    return (time.time() - _CACHE_FILE.stat().st_mtime) < _CACHE_TTL
+# ── Cache persistence ─────────────────────────────────────────────────────────
 
 
-def _read_cache() -> list[str]:
+def _load_cache() -> dict:
+    _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
     try:
         return json.loads(_CACHE_FILE.read_text())
     except Exception:
-        return []
+        return {}
 
 
-def _write_cache(ids: list[str]) -> None:
+def _write_cache_key(backend: str, ids: list[str]) -> None:
+    cache = _load_cache()
+    cache[backend] = ids
+    cache[f"{backend}_ts"] = time.time()
     _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _CACHE_FILE.write_text(json.dumps(ids))
+    _CACHE_FILE.write_text(json.dumps(cache))

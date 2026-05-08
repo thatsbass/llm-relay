@@ -197,6 +197,9 @@ Quitter complètement Claude Desktop (⌘Q) et relancer. La config `inferenceMod
 | `llm-relay backend list` | Lister les providers |
 | `llm-relay claude proxy` | Claude Code → proxy |
 | `llm-relay claude direct` | Claude Code → Anthropic |
+| `llm-relay codex proxy` | Codex CLI → proxy |
+| `llm-relay codex direct` | Codex CLI → OpenAI direct |
+| `llm-relay models [-b backend] [-r]` | Lister/rafraîchir les modèles |
 | `llm-relay trust-ca` | Installer le certificat HTTPS |
 | `llm-relay update` | Mettre à jour |
 

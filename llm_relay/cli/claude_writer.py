@@ -40,10 +40,14 @@ def _write_3p_config(gateway_url: str, provider: str = "deepseek") -> None:
 
     config_id = _ensure_config_id()
 
-    # Anthropic model names that Claude Desktop accepts + our proxy maps.
+    # Anthropic model names that Claude Desktop validates.
+    # For non-Anthropic backends we include the vendor model IDs too.
     models = ["claude-sonnet-4-6", "claude-haiku-4-5"]
-    if "opencode" in provider:
-        models.extend(["glm-5", "kimi-k2.6", "qwen3.6-plus"])
+    from llm_relay.models import get_models_for_backend
+    extra = get_models_for_backend(provider)
+    for m in extra:
+        if m not in models:
+            models.append(m)
 
     config = {
         "inferenceProvider": "gateway",

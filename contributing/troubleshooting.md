@@ -192,6 +192,26 @@ Fichier : `~/.llm-relay/proxy.log`
 
 ---
 
+## Modèles
+
+### Les modèles ne s'affichent pas
+
+```bash
+# Voir les modèles disponibles pour le backend actif
+llm-relay models
+
+# Voir les modèles d'un backend spécifique
+llm-relay models --backend opencode
+llm-relay models --backend deepseek
+
+# Rafraîchir depuis l'API
+llm-relay models --refresh
+```
+
+Le cache est valide 1 heure. Les modèles statiques (DeepSeek) n'ont pas besoin de cache.
+
+---
+
 ## Diagnostic rapide
 
 ```bash

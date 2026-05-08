@@ -54,9 +54,7 @@ def _start_daemon(relay_cfg: RelayConfig, tls: bool = False, port: int | None = 
                 f"  Use llm-relay stop or llm-relay start --daemon --force"
             )
 
-    # Check if the port is occupied by a non-llm-relay process.
-    occupied = _port_in_use(effective_port)
-    if occupied:
+    if _port_in_use(effective_port):
         if force:
             _kill_port(effective_port)
             _ok(f"Killed process on port {effective_port}")
@@ -66,6 +64,8 @@ def _start_daemon(relay_cfg: RelayConfig, tls: bool = False, port: int | None = 
                 f"  Find it:  lsof -ti:{effective_port}\n"
                 f"  Kill it:  llm-relay start --daemon --force"
             )
+
+    _ok(f"Using port {effective_port}")
 
     _LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
@@ -81,8 +81,22 @@ def _start_daemon(relay_cfg: RelayConfig, tls: bool = False, port: int | None = 
     if child_pid > 0:
         # ── Parent ──────────────────────────────────────────────────
         os.close(w_fd)
-        ready, _, _ = select.select([r_fd], [], [], 15)
-        msg = os.read(r_fd, 1024) if ready else b""
+        msg = b""
+        # Wait until the child writes or exits (no timeout — we need the
+        # real result, not a guess).
+        while True:
+            ready, _, _ = select.select([r_fd], [], [], 30)
+            if ready:
+                chunk = os.read(r_fd, 4096)
+                if not chunk:  # EOF — child crashed without writing
+                    break
+                msg += chunk
+                if b"ok" in msg or b"Cannot bind" in msg:
+                    break
+            else:
+                # Timeout after 30s — child likely hung, but we already
+                # got some output.  Break and decide based on what we have.
+                break
         os.close(r_fd)
 
         if msg == b"ok":

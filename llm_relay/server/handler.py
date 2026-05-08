@@ -134,6 +134,15 @@ def make_handler(
                 if m.get("tool_calls") or m.get("role") == "tool"
             )
 
+            # Always log backend for Codex CLI requests.
+            print(
+                f"[llm-relay] responses model={req_data.get('model', '?')}"
+                f" backend={self._config.backend}"
+                f" msgs={len(messages)} tools={len(tools or [])}"
+                f" stream={stream}",
+                file=sys.stderr,
+            )
+
             if self._config.debug:
                 self._log_request(req_id, messages, tc_count, stream, tools)
 
@@ -197,13 +206,20 @@ def make_handler(
             parsed = parse_anthropic_request(req_data)
             stream = parsed.stream
 
+            # Always log which backend is active (not just in debug mode).
+            backend_label = self._config.backend
+            print(
+                f"[llm-relay] anthropic model={parsed.model}"
+                f" backend={backend_label}"
+                f" msgs={len(parsed.messages)} tools={len(parsed.tools or [])}"
+                f" stream={stream}",
+                file=sys.stderr,
+            )
+
             if self._config.debug:
                 print(
-                    f"\n{'=' * 60} [anthropic] {parsed.model}\n"
-                    f"  messages={len(parsed.messages)}  tools={len(parsed.tools or [])}"
-                    f"  stream={stream}  max_tokens={parsed.max_tokens}\n"
-                    f"  backend={self._config.backend}"
-                    f"  pass_through={self._routing.has_pass_through()}",
+                    f"  pass_through={self._routing.has_pass_through()}"
+                    f"  max_tokens={parsed.max_tokens}",
                     file=sys.stderr,
                 )
 

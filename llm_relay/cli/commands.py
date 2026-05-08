@@ -603,20 +603,33 @@ def _patch_path() -> None:
 
 
 def _write_claude_env(provider: str) -> None:
-    """Write ~/.llm-relay/claude-code.env for the given provider."""
+    """Write ~/.llm-relay/claude-code.env for the given provider.
+
+    Distributes available models across the 5 Claude Code slots so the
+    model picker shows distinct options.
+    """
     from llm_relay.models import get_models_for_backend
 
     models = get_models_for_backend(provider)
-    primary = models[0] if models else "deepseek-v4-pro"
-    flash = "deepseek-v4-flash"
-    for m in models:
-        if "flash" in m.lower() or "haiku" in m.lower():
-            flash = m
-            break
+    n = len(models)
+    if n < 2:
+        models = ["deepseek-v4-pro", "deepseek-v4-flash"]
+        n = 2
+
+    # Spread picks across the sorted list for maximum diversity.
+    primary  = models[0]                          # first
+    opus     = models[min(1, n - 1)]              # second
+    sonnet   = models[min(n // 2, n - 1)]         # middle
+    haiku    = models[min(n * 2 // 3, n - 1)]     # two-thirds
+    subagent = models[-1]                         # last (cheapest)
 
     cfg = config_manager.load()
     port = cfg.port if cfg else 8080
-    scheme = "https"  # Claude Desktop + Code require HTTPS by default.
+    scheme = "https"
+
+    cfg = config_manager.load()
+    port = cfg.port if cfg else 8080
+    scheme = "https"
 
     _CLAUDE_ENV.parent.mkdir(parents=True, exist_ok=True)
     _CLAUDE_ENV.write_text(f"""# llm-relay — Claude Code environment
@@ -625,9 +638,9 @@ def _write_claude_env(provider: str) -> None:
 export ANTHROPIC_BASE_URL="{scheme}://127.0.0.1:{port}"
 export ANTHROPIC_AUTH_TOKEN="llm-relay"
 export ANTHROPIC_MODEL="{primary}"
-export ANTHROPIC_DEFAULT_OPUS_MODEL="{primary}"
-export ANTHROPIC_DEFAULT_SONNET_MODEL="{primary}"
-export ANTHROPIC_DEFAULT_HAIKU_MODEL="{flash}"
-export CLAUDE_CODE_SUBAGENT_MODEL="{flash}"
+export ANTHROPIC_DEFAULT_OPUS_MODEL="{opus}"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="{sonnet}"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="{haiku}"
+export CLAUDE_CODE_SUBAGENT_MODEL="{subagent}"
 export CLAUDE_CODE_EFFORT_LEVEL="max"
 """, encoding="utf-8")

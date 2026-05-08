@@ -40,8 +40,8 @@ class ModelSource:
 
 # Add a new provider here — everything else picks it up automatically.
 PROVIDER_MODEL_SOURCES: dict[str, ModelSource] = {
-    "deepseek":           ModelSource.static(["claude-sonnet-4-6", "claude-haiku-4-5"]),
-    "deepseek-anthropic": ModelSource.static(["claude-sonnet-4-6", "claude-haiku-4-5"]),
+    "deepseek":           ModelSource.static(["deepseek-v4-pro[1m]", "deepseek-v4-flash"]),
+    "deepseek-anthropic": ModelSource.static(["deepseek-v4-pro[1m]", "deepseek-v4-flash"]),
     "opencode":           ModelSource.api("https://opencode.ai/zen/go/v1/models"),
 }
 

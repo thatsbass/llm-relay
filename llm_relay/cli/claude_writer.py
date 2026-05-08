@@ -40,14 +40,10 @@ def _write_3p_config(gateway_url: str, provider: str = "deepseek") -> None:
 
     config_id = _ensure_config_id()
 
-    # Anthropic model names that Claude Desktop validates.
-    # For non-Anthropic backends we include the vendor model IDs too.
-    models = ["claude-sonnet-4-6", "claude-haiku-4-5"]
-    from llm_relay.models import get_models_for_backend
-    extra = get_models_for_backend(provider)
-    for m in extra:
-        if m not in models:
-            models.append(m)
+    # Claude Desktop validates every entry in inferenceModels against its
+    # Anthropic model catalog. Only Anthropic model names are accepted.
+    # The proxy intercepts these requests and routes to the actual backend.
+    models = ["claude-sonnet-4-5", "claude-sonnet-4-6", "claude-haiku-4-5"]
 
     config = {
         "inferenceProvider": "gateway",
@@ -69,7 +65,7 @@ def _write_3p_config(gateway_url: str, provider: str = "deepseek") -> None:
 
     print(f"  \033[32m✓\033[0m Claude Desktop 3P config written → {config_path}")
     print(f"    Gateway URL : {gateway_url}")
-    print(f"    Models      : claude-sonnet-4-6, claude-haiku-4-5")
+    print(f"    Models      : {', '.join(models)}")
     print(f"    Auto-chooser: enabled (switch 3P ↔ Anthropic at login)")
 
 

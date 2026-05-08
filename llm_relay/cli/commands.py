@@ -494,6 +494,23 @@ def cmd_backend(name: str | None = None) -> None:
         _die("Not configured yet. Run: llm-relay setup")
 
     cfg.provider = name
+
+    # Use the stored key for this backend if we have one; otherwise ask.
+    stored_key = cfg.api_keys.get(name, "")
+    if stored_key:
+        cfg.api_key = stored_key
+    else:
+        import getpass
+        env_var = PROVIDERS[name].get("env_key", "API_KEY")
+        print(f"  No stored key for {PROVIDERS[name]['display']}.")
+        try:
+            new_key = getpass.getpass(f"  {env_var}: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            _die("Cancelled.")
+        if not new_key:
+            _die("API key cannot be empty.")
+        cfg.api_key = new_key
+
     config_manager.save(cfg)
     _update_codex(cfg)
     _ok(f"Backend switched to {PROVIDERS[name]['display']}")
@@ -709,17 +726,17 @@ def _write_claude_env(provider: str, port: int | None = None, tls: bool = False)
 
     models = get_models_for_backend(provider)
     if not models:
-        models = ["deepseek-v4-pro", "deepseek-v4-flash"]
+        models = ["deepseek-v4-pro[1m]", "deepseek-v4-flash"]
 
-    # Use the same primary model for every Claude Code model slot so that
-    # all requests — main turns, subagents, tool calls — use the same model.
-    # This prevents confusing log entries where the model switches mid-session
-    # (e.g. glm-5.1 for the main turn but minimax-m2.5 for a spawned subagent).
+    # Heavy slots (main turn, opus, sonnet) → primary model.
+    # Light slots (haiku, subagents) → flash variant if available.
+    # Mirrors DeepSeek's official Claude Code recommendation.
     primary  = models[0]
+    flash    = models[1] if len(models) > 1 else primary
     opus     = primary
     sonnet   = primary
-    haiku    = primary
-    subagent = primary
+    haiku    = flash
+    subagent = flash
 
     if port is None:
         cfg  = config_manager.load()

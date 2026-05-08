@@ -113,7 +113,12 @@ class AnthropicPassThroughTranslator(AbstractTranslator):
 
         for block in content:
             block_type = block.get("type", "")
-            if block_type == "text":
+            if block_type == "thinking":
+                output.append({
+                    "type":     "thinking",
+                    "thinking": block.get("thinking", ""),
+                })
+            elif block_type == "text":
                 output.append({
                     "type":    "message",
                     "role":    "assistant",

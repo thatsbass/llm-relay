@@ -25,11 +25,15 @@ def run() -> RelayConfig:
     try:
         port      = _ask_port(existing.port)
         provider  = _ask_provider(existing.provider)
-        api_key   = _ask_api_key(existing.api_key, provider)
+        # Pre-fill from the per-provider store so the user doesn't re-enter a
+        # key they already gave us for this backend.
+        stored    = existing.api_keys.get(provider, existing.api_key if provider == existing.provider else "")
+        api_key   = _ask_api_key(stored, provider)
         fb_prov   = _ask_fallback(existing.fallback_provider or "")
         fb_key    = ""
         if fb_prov:
-            fb_key = _ask_api_key(existing.fallback_api_key or "", fb_prov)
+            stored_fb = existing.api_keys.get(fb_prov, existing.fallback_api_key or "")
+            fb_key = _ask_api_key(stored_fb, fb_prov)
     except (KeyboardInterrupt, EOFError):
         print("\n\nSetup cancelled.")
         sys.exit(1)
@@ -38,6 +42,7 @@ def run() -> RelayConfig:
         port=port,
         provider=provider,
         api_key=api_key,
+        api_keys=existing.api_keys,   # carry the full per-provider store forward
         fallback_provider=fb_prov,
         fallback_api_key=fb_key,
     )

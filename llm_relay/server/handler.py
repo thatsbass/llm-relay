@@ -27,6 +27,25 @@ from llm_relay.session.store import SessionStore
 from llm_relay.translators.base import AbstractTranslator
 
 
+def _remap_claude_model(model: str, backend: str) -> str | None:
+    """Map Claude Desktop model names to actual backend models.
+
+    Claude Desktop sends `claude-sonnet-4-6` / `claude-haiku-4-5` via the 3P
+    gateway. The chat-completions path must translate these to real backend IDs
+    before forwarding.  Non-claude names (e.g. deepseek-v4-pro[1m]) pass through
+    unchanged so Claude Code CLI model overrides still work.
+    """
+    if not model or not model.startswith("claude-"):
+        return model
+    models = get_models_for_backend(backend)
+    if not models:
+        return None
+    # haiku → flash/secondary; everything else → primary
+    if "haiku" in model:
+        return models[1] if len(models) > 1 else models[0]
+    return models[0]
+
+
 # ── Handler factory ───────────────────────────────────────────────────────────
 
 
@@ -267,7 +286,7 @@ def make_handler(
                     0,
                     temperature=parsed.temperature,
                     top_p=parsed.top_p,
-                    model=parsed.model,
+                    model=_remap_claude_model(parsed.model, self._config.backend),
                 )
                 raw_resp = self._routing.forward(json.dumps(payload).encode())
                 result   = self._routing.parse_response(raw_resp, f"msg_{uuid.uuid4().hex[:24]}")
@@ -507,7 +526,25 @@ def make_handler(
             for item in output:
                 item_type = item.get("type")
 
-                if item_type == "message":
+                if item_type == "thinking":
+                    thinking = item.get("thinking", "")
+                    self._emit("content_block_start", {
+                        "type": "content_block_start",
+                        "index": block_index,
+                        "content_block": {"type": "thinking", "thinking": ""},
+                    })
+                    self._emit("content_block_delta", {
+                        "type": "content_block_delta",
+                        "index": block_index,
+                        "delta": {"type": "thinking_delta", "thinking": thinking},
+                    })
+                    self._emit("content_block_stop", {
+                        "type": "content_block_stop",
+                        "index": block_index,
+                    })
+                    block_index += 1
+
+                elif item_type == "message":
                     text = ""
                     for part in item.get("content", []):
                         if part.get("type") == "output_text":

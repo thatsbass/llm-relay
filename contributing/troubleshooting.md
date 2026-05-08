@@ -6,6 +6,25 @@ Problèmes courants et leurs solutions pour llm-relay.
 
 ## Claude Desktop 3P
 
+### "inferenceModels: configured model X is not an Anthropic model"
+
+```
+Invalid custom3p enterprise config: inferenceModels: configured model "glm-5.1" is not
+an Anthropic model. Gateway deployments require an Anthropic model from the provider catalog.
+```
+
+Claude Desktop valide que chaque entrée dans `inferenceModels` est un modèle Anthropic reconnu. Les noms de modèles backend (DeepSeek, OpenCode) ne sont pas acceptés dans ce champ.
+
+Regénérer la config (corrigée depuis la v0.2.3) :
+
+```bash
+llm-relay setup
+# ou :
+llm-relay config backend deepseek-anthropic
+```
+
+Puis quitter et relancer Claude Desktop (⌘Q). La config générée contiendra uniquement des noms Anthropic (`claude-sonnet-4-5`, `claude-sonnet-4-6`, `claude-haiku-4-5`) — le proxy route vers le vrai backend automatiquement.
+
 ### "Gateway was unreachable: net::ERR_CERT_AUTHORITY_INVALID"
 
 Le certificat HTTPS auto-signé n'est pas reconnu par Claude Desktop (Electron).
@@ -36,7 +55,7 @@ An assistant message with 'tool_calls' must be followed by tool messages...
 
 Cause : l'ordre des messages Chat Completions est incorrect. Les `tool_result` doivent être placés avant le texte utilisateur. Mettre à jour llm-relay.
 
-### Le sélecteur de modèles n'affiche pas DeepSeek
+### Le sélecteur de modèles n'affiche pas les modèles
 
 Claude Desktop garde en cache la liste des modèles. Vérifier la config 3P :
 
@@ -44,13 +63,16 @@ Claude Desktop garde en cache la liste des modèles. Vérifier la config 3P :
 cat ~/Library/Application\ Support/Claude-3p/configLibrary/*.json | grep inferenceModels
 ```
 
-Doit contenir :
+Doit contenir des noms de modèles Anthropic :
 ```json
 "inferenceModels": [
-  {"name": "deepseek-v4-pro", "supports1m": true},
-  {"name": "deepseek-v4-flash"}
+  "claude-sonnet-4-5",
+  "claude-sonnet-4-6",
+  "claude-haiku-4-5"
 ]
 ```
+
+> Claude Desktop valide que chaque entrée est un modèle Anthropic — ne pas y mettre des noms DeepSeek/OpenCode. Le proxy route vers le vrai backend automatiquement.
 
 Si absent, relancer `llm-relay setup` pour regénérer.
 

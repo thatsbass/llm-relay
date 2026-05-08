@@ -87,6 +87,8 @@ examples:
     claude_p = subparsers.add_parser("claude", help="Configure Claude Code CLI")
     claude_p.add_argument("mode", choices=["proxy", "direct"], help="proxy | direct")
 
+    subparsers.add_parser("codex", help="Configure Codex CLI to use the proxy")
+
     return parser
 
 
@@ -100,6 +102,7 @@ def main() -> None:
     from llm_relay.cli.commands import (
         cmd_backend,
         cmd_claude,
+        cmd_codex,
         cmd_config,
         cmd_logs,
         cmd_setup,
@@ -126,6 +129,8 @@ def main() -> None:
         cmd_backend(name=args.name)
     elif args.command == "claude":
         cmd_claude(args.mode)
+    elif args.command == "codex":
+        cmd_codex()
     elif args.command == "config":
         if args.key == "backend":
             cmd_backend(name=args.value)

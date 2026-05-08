@@ -107,16 +107,21 @@ def _ask_fallback(current: str) -> str:
 
 
 def _save(config: RelayConfig) -> None:
-    """Persist config and update ~/.codex/config.toml, then print a summary."""
+    """Persist config and update all agent configs, then print a summary."""
     print()
 
     config_manager.save(config)
-    _ok("Config saved         → ~/.llm-relay/config.json")
+    _ok("Config saved              → ~/.llm-relay/config.json")
 
     codex_writer.update(config)
-    _ok("Codex config updated → ~/.codex/config.toml")
+    _ok("Codex config updated      → ~/.codex/config.toml")
 
-    _ok(".env written         → ~/.llm-relay/.env")
+    _ok(".env written              → ~/.llm-relay/.env")
+
+    # Configure wrappers for both agents.
+    from llm_relay.cli.commands import cmd_claude, cmd_codex
+    cmd_codex()
+    cmd_claude("proxy")
 
     profile = _patch_shell_profile()
     if profile:
@@ -131,7 +136,7 @@ def _save(config: RelayConfig) -> None:
     print("  \033[1mNext steps:\033[0m")
     print(f"    1. Reload your shell:  {reload_cmd}")
     print("    2. Start the proxy:    llm-relay start --tls --port 8443")
-    print("    3. For Codex CLI:      codex")
+    print("    3. Just type \033[1mclaude\033[0m or \033[1mcodex\033[0m")
     print()
     tls = os.environ.get("LLM_RELAY_TLS", "").lower() in ("1", "true", "yes")
     # Default to HTTPS — Claude Desktop 3P requires it.

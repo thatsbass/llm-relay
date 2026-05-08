@@ -132,4 +132,5 @@ def _write_env(config: RelayConfig) -> None:
         lines.append(f'export {fb_key}="{config.fallback_api_key}"')
         lines.append(f'export LLM_RELAY_FALLBACK_BACKEND="{config.fallback_provider}"')
     lines.append(f'export OPENAI_BASE_URL="{config.base_url()}"')
+    lines.append(f'export OPENAI_API_KEY="{config.api_key}"')
     ENV_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")

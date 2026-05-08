@@ -17,9 +17,10 @@ from llm_relay.cli.codex_writer import update as _update_codex
 from llm_relay.cli.wizard import run as _run_wizard
 
 _REPO   = "https://github.com/thatsbass/llm-relay.git"
-_LOG_FILE = Path.home() / ".llm-relay" / "proxy.log"
+_LOG_FILE  = Path.home() / ".llm-relay" / "proxy.log"
 _CLAUDE_ENV = Path.home() / ".llm-relay" / "claude-code.env"
 _CLAUDE_BIN = Path.home() / ".llm-relay" / "bin" / "claude"
+_CODEX_BIN  = Path.home() / ".llm-relay" / "bin" / "codex"
 
 
 # ── start ─────────────────────────────────────────────────────────────────────
@@ -463,6 +464,37 @@ exec "${real:-claude}" "$@"
     label = "proxy" if mode == "proxy" else "Anthropic direct"
     _ok(f"Claude Code → {label}")
     print(f"  Just type \033[1mclaude\033[0m — it will use the right config automatically.")
+    print()
+
+
+# ── codex ──────────────────────────────────────────────────────────────────────
+
+
+def cmd_codex() -> None:
+    """Configure Codex CLI to use the llm-relay proxy."""
+    cfg = config_manager.load()
+    if cfg is None:
+        _die("Not configured yet. Run: llm-relay setup")
+
+    # Write wrapper that sources .env before each codex invocation.
+    _CODEX_BIN.parent.mkdir(parents=True, exist_ok=True)
+    _CODEX_BIN.write_text("""#!/bin/bash
+# llm-relay — Codex CLI wrapper (auto-sources env)
+source "$HOME/.llm-relay/.env"
+
+# Find the real codex binary, skipping this wrapper.
+real=""
+for p in $(echo "$PATH" | tr ':' '\\n'); do
+    [ "$p" = "$HOME/.llm-relay/bin" ] && continue
+    if [ -x "$p/codex" ]; then real="$p/codex"; break; fi
+done
+exec "${real:-codex}" "$@"
+""")
+    _CODEX_BIN.chmod(0o755)
+
+    _patch_path()
+    _ok("Codex CLI configured")
+    print(f"  Just type \033[1mcodex\033[0m — it auto-sources the env.")
     print()
 
 

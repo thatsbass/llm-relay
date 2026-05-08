@@ -429,16 +429,10 @@ def cmd_claude(mode: str) -> None:
     if mode == "proxy":
         _write_claude_env(config_manager.load().provider if config_manager.load() else "deepseek")
     else:
-        api_key = os.environ.get("ANTHROPIC_AUTH_TOKEN", "").strip()
-        if not api_key:
-            api_key = input("  Anthropic API key: ").strip()
-            if not api_key:
-                _die("API key required for direct Anthropic access")
-
-        _CLAUDE_ENV.write_text(f"""# llm-relay — Claude Code (Anthropic direct)
+        _CLAUDE_ENV.write_text("""# llm-relay — Claude Code (Anthropic direct, OAuth)
 export ANTHROPIC_BASE_URL="https://api.anthropic.com"
-export ANTHROPIC_AUTH_TOKEN="{api_key}"
-# No model overrides — Claude Code picks its own models.
+# Let Claude Code handle auth via its own OAuth (/login).
+unset ANTHROPIC_AUTH_TOKEN
 unset ANTHROPIC_MODEL
 unset ANTHROPIC_DEFAULT_OPUS_MODEL
 unset ANTHROPIC_DEFAULT_SONNET_MODEL

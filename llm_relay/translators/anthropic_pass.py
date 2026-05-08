@@ -20,14 +20,13 @@ class AnthropicPassThroughTranslator(AbstractTranslator):
     backend must understand the Anthropic protocol.
     """
 
-    DEFAULT_BASE_URL:      str = ""   # e.g. "https://api.deepseek.com/anthropic"
+    DEFAULT_BASE_URL:      str = ""
     DEFAULT_CHAT_ENDPOINT: str = "/v1/messages"
     DEFAULT_MODEL:         str = ""
 
     # Map Claude model names (sent by Claude Desktop) to backend model IDs.
     MODEL_MAP: dict[str, str] = {}
 
-    # Flag telling the handler it can relay SSE events directly.
     supports_anthropic_stream_relay: bool = True
 
     def __init__(self, config) -> None:

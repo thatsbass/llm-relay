@@ -60,10 +60,11 @@ class ChatCompletionsTranslator(AbstractTranslator):
         tc_count: int,
         temperature: float | None = None,
         top_p: float | None = None,
+        model: str | None = None,
     ) -> dict:
         """Assemble the Chat Completions request payload."""
         payload: dict = {
-            "model":      self._model_effective,
+            "model":      model or self._model_effective,
             "messages":   messages,
             "stream":     False,
             "max_tokens": max_output_tokens,

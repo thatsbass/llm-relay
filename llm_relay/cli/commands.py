@@ -536,6 +536,27 @@ def cmd_logs(lines: int = 20, follow: bool = False) -> None:
             print(f"  {line}")
 
 
+# ── models ─────────────────────────────────────────────────────────────────────
+
+
+def cmd_models(refresh: bool = False) -> None:
+    """List available models for the current backend."""
+    from llm_relay.models import get_models_for_backend, refresh_models
+
+    if refresh:
+        refresh_models()
+        _ok("Models refreshed from OpenCode Go API")
+
+    cfg = config_manager.load()
+    backend = cfg.provider if cfg else "deepseek"
+    models = get_models_for_backend(backend)
+    print()
+    print(f"  Models for {backend}:")
+    for m in models:
+        print(f"    {m}")
+    print()
+
+
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
 
@@ -577,12 +598,20 @@ def _patch_path() -> None:
 
 def _write_claude_env(provider: str) -> None:
     """Write ~/.llm-relay/claude-code.env for the given provider."""
-    model_map = {
-        "deepseek":           ("deepseek-chat",     "deepseek-chat"),
-        "deepseek-anthropic": ("deepseek-v4-pro",   "deepseek-v4-flash"),
-        "opencode":           ("glm-5",             "kimi-k2.6"),
-    }
-    primary, flash = model_map.get(provider, ("deepseek-v4-pro", "deepseek-v4-flash"))
+    from llm_relay.models import get_models_for_backend, ANTHROPIC_MODEL_IDS
+
+    if "opencode" in provider:
+        models = get_models_for_backend(provider)
+        primary = models[0] if models else "glm-5"
+        # Use the first two available models as primary/flash.
+    else:
+        primary = "deepseek-v4-pro"
+
+    flash = "deepseek-v4-flash"
+    for m in get_models_for_backend(provider):
+        if "flash" in m or "kimi" in m:
+            flash = m
+            break
 
     cfg = config_manager.load()
     port = cfg.port if cfg else 8080

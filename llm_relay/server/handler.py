@@ -18,6 +18,7 @@ from http.server import BaseHTTPRequestHandler
 from urllib.error import HTTPError, URLError
 
 from llm_relay.config import Config
+from llm_relay.models import get_models_for_backend
 from llm_relay.parsers.anthropic_messages import parse_anthropic_request
 from llm_relay.parsers.messages import input_to_messages, translate_tools
 from llm_relay.routing.engine import RoutingEngine
@@ -73,42 +74,18 @@ def make_handler(
                 self.send_error(404)
 
         def _handle_models(self) -> None:
-            """Return available models in Anthropic format for auto-discovery.
-
-            Returns model IDs the proxy can route.  Claude Desktop uses
-            ``inferenceModels`` from the 3P config for its picker; this
-            endpoint is used by Claude Code CLI and auto-discovery.
-            """
-            backend = self._config.backend
-            if "opencode" in backend:
-                ids = [
-                    "claude-sonnet-4-6",
-                    "claude-haiku-4-5",
-                    "glm-5",
-                    "kimi-k2.6",
-                    "qwen3.6-plus",
-                    "deepseek-v4-pro",
-                    "deepseek-v4-flash",
-                ]
-            else:
-                ids = [
-                    "claude-sonnet-4-6",
-                    "claude-haiku-4-5",
-                ]
+            """Return available models in Anthropic format."""
+            ids = get_models_for_backend(self._config.backend)
             models = [
-                {
-                    "id": mid,
-                    "type": "model",
-                    "display_name": mid,
-                    "created_at": "2026-01-01T00:00:00Z",
-                }
+                {"id": mid, "type": "model", "display_name": mid,
+                 "created_at": "2026-01-01T00:00:00Z"}
                 for mid in ids
             ]
             self._send_json_direct({
                 "data": models,
                 "has_more": False,
-                "first_id": ids[0],
-                "last_id": ids[-1],
+                "first_id": ids[0] if ids else "",
+                "last_id": ids[-1] if ids else "",
             })
 
         # ── POST /responses ───────────────────────────────────────────────────
@@ -279,6 +256,7 @@ def make_handler(
                     0,
                     temperature=parsed.temperature,
                     top_p=parsed.top_p,
+                    model=parsed.model,
                 )
                 if self._config.debug:
                     print(f"  [translate] forwarding to {self._routing.primary._full_url()}", file=sys.stderr)

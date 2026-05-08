@@ -90,6 +90,9 @@ examples:
     codex_p = subparsers.add_parser("codex", help="Configure Codex CLI")
     codex_p.add_argument("mode", nargs="?", choices=["proxy", "direct"], default="proxy", help="proxy | direct")
 
+    models_p = subparsers.add_parser("models", help="List or refresh available models")
+    models_p.add_argument("--refresh", "-r", action="store_true", help="Force-refresh from API")
+
     return parser
 
 
@@ -106,6 +109,7 @@ def main() -> None:
         cmd_codex,
         cmd_config,
         cmd_logs,
+        cmd_models,
         cmd_setup,
         cmd_start,
         cmd_status,
@@ -132,6 +136,8 @@ def main() -> None:
         cmd_claude(args.mode)
     elif args.command == "codex":
         cmd_codex(mode=args.mode)
+    elif args.command == "models":
+        cmd_models(refresh=args.refresh)
     elif args.command == "config":
         if args.key == "backend":
             cmd_backend(name=args.value)

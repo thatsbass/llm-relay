@@ -87,7 +87,8 @@ examples:
     claude_p = subparsers.add_parser("claude", help="Configure Claude Code CLI")
     claude_p.add_argument("mode", choices=["proxy", "direct"], help="proxy | direct")
 
-    subparsers.add_parser("codex", help="Configure Codex CLI to use the proxy")
+    codex_p = subparsers.add_parser("codex", help="Configure Codex CLI")
+    codex_p.add_argument("mode", nargs="?", choices=["proxy", "direct"], default="proxy", help="proxy | direct")
 
     return parser
 
@@ -130,7 +131,7 @@ def main() -> None:
     elif args.command == "claude":
         cmd_claude(args.mode)
     elif args.command == "codex":
-        cmd_codex()
+        cmd_codex(mode=args.mode)
     elif args.command == "config":
         if args.key == "backend":
             cmd_backend(name=args.value)

@@ -470,19 +470,36 @@ exec "${real:-claude}" "$@"
 # ── codex ──────────────────────────────────────────────────────────────────────
 
 
-def cmd_codex() -> None:
-    """Configure Codex CLI to use the llm-relay proxy."""
-    cfg = config_manager.load()
-    if cfg is None:
-        _die("Not configured yet. Run: llm-relay setup")
+def cmd_codex(mode: str = "proxy") -> None:
+    """Configure Codex CLI to use the proxy or OpenAI directly."""
+    if mode not in ("proxy", "direct"):
+        _die("Usage: llm-relay codex <proxy|direct>")
 
-    # Write wrapper that sources .env before each codex invocation.
     _CODEX_BIN.parent.mkdir(parents=True, exist_ok=True)
-    _CODEX_BIN.write_text("""#!/bin/bash
+
+    if mode == "direct":
+        api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+        if not api_key:
+            api_key = input("  OpenAI API key: ").strip()
+            if not api_key:
+                _die("API key required for direct OpenAI access")
+        _CODEX_BIN.write_text(f"""#!/bin/bash
+# llm-relay — Codex CLI wrapper (OpenAI direct)
+export OPENAI_API_KEY="{api_key}"
+unset OPENAI_BASE_URL
+
+real=""
+for p in $(echo "$PATH" | tr ':' '\\n'); do
+    [ "$p" = "$HOME/.llm-relay/bin" ] && continue
+    if [ -x "$p/codex" ]; then real="$p/codex"; break; fi
+done
+exec "${{real:-codex}}" "$@"
+""")
+    else:
+        _CODEX_BIN.write_text("""#!/bin/bash
 # llm-relay — Codex CLI wrapper (auto-sources env)
 source "$HOME/.llm-relay/.env"
 
-# Find the real codex binary, skipping this wrapper.
 real=""
 for p in $(echo "$PATH" | tr ':' '\\n'); do
     [ "$p" = "$HOME/.llm-relay/bin" ] && continue
@@ -490,11 +507,13 @@ for p in $(echo "$PATH" | tr ':' '\\n'); do
 done
 exec "${real:-codex}" "$@"
 """)
-    _CODEX_BIN.chmod(0o755)
 
+    _CODEX_BIN.chmod(0o755)
     _patch_path()
-    _ok("Codex CLI configured")
-    print(f"  Just type \033[1mcodex\033[0m — it auto-sources the env.")
+
+    label = "proxy" if mode == "proxy" else "OpenAI direct"
+    _ok(f"Codex CLI → {label}")
+    print(f"  Just type \033[1mcodex\033[0m — it will use the right config automatically.")
     print()
 
 
@@ -559,9 +578,9 @@ def _patch_path() -> None:
 def _write_claude_env(provider: str) -> None:
     """Write ~/.llm-relay/claude-code.env for the given provider."""
     model_map = {
-        "deepseek": ("deepseek-chat", "deepseek-chat"),
-        "deepseek-anthropic": ("deepseek-v4-pro", "deepseek-v4-flash"),
-        "opencode": ("deepseek-v4-pro", "deepseek-v4-flash"),
+        "deepseek":           ("deepseek-chat",     "deepseek-chat"),
+        "deepseek-anthropic": ("deepseek-v4-pro",   "deepseek-v4-flash"),
+        "opencode":           ("glm-5",             "kimi-k2.6"),
     }
     primary, flash = model_map.get(provider, ("deepseek-v4-pro", "deepseek-v4-flash"))
 

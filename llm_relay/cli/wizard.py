@@ -120,7 +120,7 @@ def _save(config: RelayConfig) -> None:
 
     # Configure wrappers for both agents.
     from llm_relay.cli.commands import cmd_claude, cmd_codex
-    cmd_codex()
+    cmd_codex("proxy")
     cmd_claude("proxy")
 
     profile = _patch_shell_profile()

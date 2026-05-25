@@ -9,6 +9,7 @@ from pathlib import Path
 
 from llm_relay.cli import config_manager
 from llm_relay.cli import codex_writer
+from llm_relay.cli import claude_writer
 from llm_relay.cli.config_manager import PROVIDERS, RelayConfig
 
 
@@ -22,14 +23,29 @@ def run() -> RelayConfig:
     existing = config_manager.load() or RelayConfig.default()
 
     try:
-        port     = _ask_port(existing.port)
-        provider = _ask_provider(existing.provider)
-        api_key  = _ask_api_key(existing.api_key, provider)
+        port      = _ask_port(existing.port)
+        provider  = _ask_provider(existing.provider)
+        # Pre-fill from the per-provider store so the user doesn't re-enter a
+        # key they already gave us for this backend.
+        stored    = existing.api_keys.get(provider, existing.api_key if provider == existing.provider else "")
+        api_key   = _ask_api_key(stored, provider)
+        fb_prov   = _ask_fallback(existing.fallback_provider or "")
+        fb_key    = ""
+        if fb_prov:
+            stored_fb = existing.api_keys.get(fb_prov, existing.fallback_api_key or "")
+            fb_key = _ask_api_key(stored_fb, fb_prov)
     except (KeyboardInterrupt, EOFError):
         print("\n\nSetup cancelled.")
         sys.exit(1)
 
-    config = RelayConfig(port=port, provider=provider, api_key=api_key)
+    config = RelayConfig(
+        port=port,
+        provider=provider,
+        api_key=api_key,
+        api_keys=existing.api_keys,   # carry the full per-provider store forward
+        fallback_provider=fb_prov,
+        fallback_api_key=fb_key,
+    )
 
     _save(config)
     return config
@@ -75,20 +91,42 @@ def _ask_api_key(current: str, provider: str) -> str:
         _err("API key cannot be empty.")
 
 
+def _ask_fallback(current: str) -> str:
+    """Ask for an optional fallback provider."""
+    choices = "/".join(PROVIDERS)
+    none_label = "none"
+    while True:
+        raw = input(
+            f"  Fallback provider ({choices}/{none_label}) [{current or none_label}]: "
+        ).strip().lower()
+        if not raw:
+            return current
+        if raw == none_label:
+            return ""
+        if raw in PROVIDERS:
+            return raw
+        _err(f"Unknown provider. Choose from: {choices}/{none_label}")
+
+
 # ── Save & confirm ────────────────────────────────────────────────────────────
 
 
 def _save(config: RelayConfig) -> None:
-    """Persist config and update ~/.codex/config.toml, then print a summary."""
+    """Persist config and update all agent configs, then print a summary."""
     print()
 
     config_manager.save(config)
-    _ok("Config saved         → ~/.llm-relay/config.json")
+    _ok("Config saved              → ~/.llm-relay/config.json")
 
     codex_writer.update(config)
-    _ok("Codex config updated → ~/.codex/config.toml")
+    _ok("Codex config updated      → ~/.codex/config.toml")
 
-    _ok(".env written         → ~/.llm-relay/.env")
+    _ok(".env written              → ~/.llm-relay/.env")
+
+    # Configure wrappers for both agents.
+    from llm_relay.cli.commands import cmd_claude, cmd_codex
+    cmd_codex("proxy")
+    cmd_claude("proxy")
 
     profile = _patch_shell_profile()
     if profile:
@@ -102,9 +140,12 @@ def _save(config: RelayConfig) -> None:
     print()
     print("  \033[1mNext steps:\033[0m")
     print(f"    1. Reload your shell:  {reload_cmd}")
-    print("    2. Start the proxy:    llm-relay start")
-    print("    3. In a new terminal:  codex")
+    print("    2. Start the proxy:    llm-relay start --tls --port 8443")
+    print("    3. Just type \033[1mclaude\033[0m or \033[1mcodex\033[0m")
     print()
+    tls = os.environ.get("LLM_RELAY_TLS", "").lower() in ("1", "true", "yes")
+    # Default to HTTPS — Claude Desktop 3P requires it.
+    claude_writer.write_all(config.base_url(), config.port, tls=(tls or True), provider=config.provider)
 
 
 # ── Shell profile helpers ─────────────────────────────────────────────────────

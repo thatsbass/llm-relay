@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -28,6 +28,14 @@ PROVIDERS: dict[str, dict] = {
         "display": "DeepSeek",
         "env_key": "DEEPSEEK_API_KEY",
     },
+    "deepseek-anthropic": {
+        "display": "DeepSeek (Anthropic API)",
+        "env_key": "DEEPSEEK_API_KEY",
+    },
+    "opencode": {
+        "display": "OpenCode Go",
+        "env_key": "OPENCODE_API_KEY",
+    },
 }
 
 
@@ -40,7 +48,10 @@ class RelayConfig:
 
     port:     int
     provider: str
-    api_key:  str
+    api_key:  str                          # active provider's key (runtime convenience)
+    fallback_provider: str        = ""
+    fallback_api_key:  str        = ""
+    api_keys:          dict       = field(default_factory=dict)  # per-provider key store
 
     # ── Derived helpers ───────────────────────────────────────────────────────
 
@@ -72,27 +83,51 @@ def load() -> Optional[RelayConfig]:
     if not CONFIG_FILE.exists():
         return None
     try:
-        data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        data     = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        provider = str(data["provider"])
+        api_keys = dict(data.get("api_keys", {}))
+
+        # Migrate: if the old single api_key field exists and the provider has
+        # no entry yet in api_keys, import it so the key is not lost.
+        legacy_key = str(data.get("api_key", ""))
+        if legacy_key and provider not in api_keys:
+            api_keys[provider] = legacy_key
+
+        api_key = api_keys.get(provider, legacy_key)
+
         return RelayConfig(
             port=int(data["port"]),
-            provider=str(data["provider"]),
-            api_key=str(data["api_key"]),
+            provider=provider,
+            api_key=api_key,
+            api_keys=api_keys,
+            fallback_provider=str(data.get("fallback_provider", "")),
+            fallback_api_key=str(data.get("fallback_api_key", "")),
         )
     except (json.JSONDecodeError, KeyError, ValueError):
         return None
 
 
 def save(config: RelayConfig) -> None:
-    """
-    Persist *config* to disk and regenerate ``~/.llm-relay/.env``.
+    """Persist *config* to disk and regenerate ``~/.llm-relay/.env``.
 
-    Creates ``~/.llm-relay/`` if it does not already exist.
+    Always writes ``api_keys[provider] = api_key`` so the active key is
+    remembered when switching providers later.  The legacy ``api_key`` top-level
+    field is intentionally omitted — ``load()`` migrates old files transparently.
     """
     RELAY_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(
-        json.dumps(asdict(config), indent=2),
-        encoding="utf-8",
-    )
+
+    # Update the per-provider store with the currently active key.
+    all_keys = dict(config.api_keys)
+    all_keys[config.provider] = config.api_key
+
+    data = {
+        "port":              config.port,
+        "provider":          config.provider,
+        "api_keys":          all_keys,
+        "fallback_provider": config.fallback_provider,
+        "fallback_api_key":  config.fallback_api_key,
+    }
+    CONFIG_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
     _write_env(config)
 
 
@@ -113,6 +148,12 @@ def _write_env(config: RelayConfig) -> None:
         "#   source ~/.llm-relay/.env",
         "",
         f'export {env_key}="{config.api_key}"',
-        f'export OPENAI_BASE_URL="{config.base_url()}"',
     ]
+    if config.fallback_provider:
+        fb_info = PROVIDERS.get(config.fallback_provider, {})
+        fb_key = fb_info.get("env_key", "FALLBACK_API_KEY")
+        lines.append(f'export {fb_key}="{config.fallback_api_key}"')
+        lines.append(f'export LLM_RELAY_FALLBACK_BACKEND="{config.fallback_provider}"')
+    lines.append(f'export OPENAI_BASE_URL="{config.base_url()}"')
+    lines.append(f'export OPENAI_API_KEY="{config.api_key}"')
     ENV_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")

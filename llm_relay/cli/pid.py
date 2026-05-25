@@ -50,11 +50,10 @@ def read() -> Optional[int]:
     except (ValueError, OSError):
         return None
 
-    # os.kill(pid, 0) is a no-op signal used purely as a process existence check.
-    try:
-        os.kill(pid, 0)
+    # Vérification de l'existence du processus compatible Windows
+    if _process_alive(pid):
         return pid
-    except (ProcessLookupError, PermissionError):
+    else:
         _PID_FILE.unlink(missing_ok=True)
         _PORT_FILE.unlink(missing_ok=True)
         return None
@@ -101,13 +100,26 @@ def _kill(pid: int, sig: int) -> bool:
     try:
         os.kill(pid, sig)
         return True
-    except (ProcessLookupError, PermissionError):
+    except (ProcessLookupError, PermissionError, OSError):
         return False
 
 
 def _process_alive(pid: int) -> bool:
+    """Vérifie si un processus avec le PID donné existe (compatible Windows)."""
     try:
-        os.kill(pid, 0)
-        return True
-    except (ProcessLookupError, PermissionError):
+        # Sous Windows, on utilise handle pour vérifier l'existence
+        if os.name == 'nt':  # Windows
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            SYNCHRONIZE = 0x00100000
+            PROCESS_QUERY_INFORMATION = 0x0400
+            handle = kernel32.OpenProcess(SYNCHRONIZE | PROCESS_QUERY_INFORMATION, False, pid)
+            if handle:
+                kernel32.CloseHandle(handle)
+                return True
+            return False
+        else:  # Unix/Linux
+            os.kill(pid, 0)
+            return True
+    except (ProcessLookupError, PermissionError, OSError):
         return False
